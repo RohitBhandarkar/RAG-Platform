@@ -1,0 +1,63 @@
+steps:
+  # Build backend Docker image
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'build-backend'
+    args:
+      - 'build'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/rag-backend:$COMMIT_SHA'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/rag-backend:latest'
+      - './backend'
+
+  # Push backend image to Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'push-backend'
+    args:
+      - 'push'
+      - 'gcr.io/$PROJECT_ID/rag-backend:$COMMIT_SHA'
+
+  # Deploy backend to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: 'deploy-backend'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'rag-backend'
+      - '--image'
+      - 'gcr.io/$PROJECT_ID/rag-backend:$COMMIT_SHA'
+      - '--region'
+      - 'us-central1'
+      - '--platform'
+      - 'managed'
+      - '--allow-unauthenticated'
+      - '--set-env-vars'
+      - 'ENVIRONMENT=production'
+
+  # Build frontend
+  - name: 'gcr.io/cloud-builders/npm'
+    id: 'build-frontend'
+    dir: 'frontend'
+    args: ['run', 'build']
+
+  # Deploy frontend to Cloud Storage
+  - name: 'gcr.io/cloud-builders/gsutil'
+    id: 'deploy-frontend'
+    args:
+      - '-m'
+      - 'rsync'
+      - '-r'
+      - '-c'
+      - '-d'
+      - './frontend/build'
+      - 'gs://$_FRONTEND_BUCKET'
+
+images:
+  - 'gcr.io/$PROJECT_ID/rag-backend:$COMMIT_SHA'
+  - 'gcr.io/$PROJECT_ID/rag-backend:latest'
+
+timeout: '1800s'
+
+substitutions:
+  _FRONTEND_BUCKET: 'rag-platform-frontend'
