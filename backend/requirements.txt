@@ -1,53 +1,61 @@
-# Python Backend Dependencies
+# Python Backend Dependencies - Minimal Setup for Basic Backend
 
-# FastAPI and web framework
+# FastAPI and web framework (REQUIRED)
 fastapi==0.109.0
 uvicorn[standard]==0.27.0
 python-multipart==0.0.6
 pydantic==2.5.3
 pydantic-settings==2.1.0
 
-# Database
-sqlalchemy==2.0.25
-psycopg2-binary==2.9.9
-alembic==1.13.1
+# Utilities (REQUIRED)
+python-dotenv==1.0.1
 
-# Vector Database
-chromadb==0.4.22
-
-# LLM and Embeddings
-langchain==0.1.4
-langchain-community==0.0.16
-openai==1.10.0
-anthropic==0.8.1
-
-# Google Cloud Platform
-google-cloud-aiplatform==1.40.0
-google-cloud-storage==2.14.0
-google-cloud-secret-manager==2.17.0
-google-cloud-logging==3.9.0
-
-# Document Processing
-pypdf2==3.0.1
-python-docx==1.1.0
-beautifulsoup4==4.12.3
-lxml==5.1.0
-
-# Scientific Computing
-numpy==1.26.3
-pandas==2.2.0
-scipy==1.12.0
-
-# HTTP Clients
+# HTTP Clients (lightweight, commonly needed)
 httpx==0.26.0
 requests==2.31.0
 
-# Bioinformatics / Scientific Data
-biopython==1.83
-pubchempy==1.0.4
+# Testing (REQUIRED for development)
+pytest==7.4.4
+pytest-asyncio==0.23.3
 
-# Utilities
-python-dotenv==1.0.1
+# ============================================
+# OPTIONAL - Install only when needed
+# ============================================
+
+# Database (uncomment when implementing DB features)
+# sqlalchemy==2.0.25
+# psycopg2-binary==2.9.9
+# alembic==1.13.1
+
+# Vector Database (uncomment when implementing vector search)
+# chromadb==0.4.22
+
+# LLM and Embeddings (uncomment when implementing RAG features)
+# langchain==0.1.4
+# langchain-community==0.0.16
+# openai==1.10.0
+# anthropic==0.8.1
+
+# Google Cloud Platform (uncomment for GCP deployment)
+# google-cloud-aiplatform==1.40.0
+# google-cloud-storage==2.14.0
+# google-cloud-secret-manager==2.17.0
+# google-cloud-logging==3.9.0
+
+# Document Processing (uncomment when implementing ingestion)
+# pypdf2==3.0.1
+# python-docx==1.1.0
+# beautifulsoup4==4.12.3
+# lxml==5.1.0
+
+# Scientific Computing (uncomment when needed)
+# numpy==1.26.3
+# pandas==2.2.0
+# scipy==1.12.0
+
+# Bioinformatics / Scientific Data (uncomment when needed)
+# biopython==1.83
+# pubchempy==1.0.4
 pyyaml==6.0.1
 
 # Testing
