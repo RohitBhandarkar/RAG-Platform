@@ -2,27 +2,28 @@
 
 from pydantic_settings import BaseSettings
 from typing import Optional
+from pydantic import Field, SecretStr
 
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
     
     # Application
-    environment: str = "development"
-    api_host: str = "0.0.0.0"
-    api_port: int = 8000
-    frontend_url: str = "http://localhost:3000"
+    environment: str = Field(..., env="ENVIRONMENT")
+    api_host: str = Field(..., env="API_HOST")
+    api_port: int = Field(..., env="API_PORT")
+    frontend_url: str = Field(..., env="FRONTEND_URL")
     
     # Database
-    postgres_host: str = "localhost"
-    postgres_port: int = 5432
-    postgres_db: str = "formulation_rag"
-    postgres_user: str = "postgres"
-    postgres_password: str = "your_password_here"
+    postgres_host: str = Field(..., env="POSTGRES_HOST")
+    postgres_port: int = Field(..., env="POSTGRES_PORT")
+    postgres_db: str = Field(..., env="POSTGRES_DB")
+    postgres_user: str = Field(..., env="POSTGRES_USER")
+    postgres_password: SecretStr = Field(..., env="POSTGRES_PASSWORD")
     
     # Vector Database
-    chroma_host: str = "localhost"
-    chroma_port: int = 8000
+    chroma_host: str = Field(..., env="CHROMA_HOST")
+    chroma_port: int = Field(..., env="CHROMA_PORT")
     use_vertex_vector_search: bool = False
     
     # LLM Providers
