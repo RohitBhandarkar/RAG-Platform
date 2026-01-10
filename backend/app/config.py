@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 """Configuration management for the RAG application."""
 
 from pydantic_settings import BaseSettings
@@ -59,4 +60,29 @@ class Settings(BaseSettings):
 settings = Settings()
 
 
+=======
+from pydantic_settings import BaseSettings
+from pydantic import Field
+
+
+class Settings(BaseSettings):
+	ENVIRONMENT: str = Field("development")
+	API_HOST: str = Field("0.0.0.0")
+	API_PORT: int = Field(8000)
+
+	POSTGRES_HOST: str = Field("localhost")
+	POSTGRES_PORT: int = Field(5432)
+	POSTGRES_DB: str = Field("formulation_rag")
+	POSTGRES_USER: str = Field("postgres")
+	POSTGRES_PASSWORD: str = Field("postgres")
+
+	class Config:
+		env_file = ".env"
+		env_file_encoding = "utf-8"
+		extra = "ignore"
+
+
+settings = Settings()
+
+>>>>>>> e79806a (feat: postgresql connection)
 __all__ = ["Settings", "settings"]

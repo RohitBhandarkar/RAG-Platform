@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 """FastAPI application entry point."""
 
 from fastapi import FastAPI, HTTPException, status
@@ -213,3 +214,71 @@ if __name__ == "__main__":
         port=settings.api_port,
         reload=settings.environment == "development"
     )
+=======
+from fastapi import APIRouter, FastAPI
+from pydantic import BaseModel
+from sqlalchemy import text
+import pytest
+
+from app.config import settings
+from app.db import check_db_connection, engine
+
+
+app = FastAPI(title="RAG Backend", version="0.1.0")
+
+health_router = APIRouter(prefix="/health", tags=["Health"])
+postgres_router = APIRouter(prefix="/postgres", tags=["Postgres"])
+tests_router = APIRouter(prefix="/tests", tags=["Tests"])
+
+
+class SQLQuery(BaseModel):
+	sql: str
+
+
+@app.get("/")
+def root():
+	return {"message": "Backend is running", "environment": settings.ENVIRONMENT}
+
+
+@health_router.get("/postgres", summary="PostgreSQL health check")
+def health_postgres():
+	ok = check_db_connection()
+	status = "healthy" if ok else "unhealthy"
+	return {
+		"service": "postgres",
+		"status": status,
+		"database": "connected" if ok else "error",
+	}
+
+
+@health_router.get("/vector", summary="Vector DB health check")
+def health_vector():
+	return {"service": "vector_db", "status": "not_configured"}
+
+
+@health_router.get("/storage", summary="Storage health check")
+def health_storage():
+	return {"service": "storage", "status": "not_configured"}
+
+
+@postgres_router.post("/query", summary="Run SQL query on PostgreSQL")
+def run_postgres_query(query: SQLQuery):
+	with engine.connect() as connection:
+		result = connection.execute(text(query.sql))
+		rows = [dict(row._mapping) for row in result]
+	return {"rows": rows}
+
+
+@tests_router.post("/run", summary="Run backend test suite")
+def run_tests():
+	exit_code = pytest.main(["-q"])
+	return {"exit_code": exit_code, "success": exit_code == 0}
+
+
+app.include_router(health_router)
+app.include_router(postgres_router)
+app.include_router(tests_router)
+
+
+__all__ = ["app"]
+>>>>>>> e79806a (feat: postgresql connection)
