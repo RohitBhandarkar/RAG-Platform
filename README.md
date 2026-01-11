@@ -77,13 +77,25 @@ cp .env.example .env
 python ../scripts/setup_database.py
 ```
 
-4. **Run with Docker Compose**
+4. **Initialize document store layout**
 ```bash
 cd ..
-docker-compose up -d
+chmod +x scripts/create_document_store.sh
+./scripts/create_document_store.sh        
 ```
 
-5. **Access the application**
+5. **Run with Docker Compose**
+```bash
+cd ..
+docker compose up -d postgres chromadb
+```
+6. **Run the backend**
+```bash
+cd backend
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
+```
+
+7. **Access the application**
 - Backend API: http://localhost:8001
 - Frontend: http://localhost:3000
 - API Documentation: http://localhost:8001/api/docs

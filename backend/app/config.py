@@ -8,6 +8,8 @@ class Settings(BaseSettings):
     API_PORT: int = Field(8000)
     FRONTEND_URL: str = Field("http://localhost:3000")
 
+    DOC_STORAGE_ROOT: str = Field("../data")
+
     POSTGRES_HOST: str = Field("localhost")
     POSTGRES_PORT: int = Field(5432)
     POSTGRES_DB: str = Field("formulation_rag")
