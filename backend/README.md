@@ -23,14 +23,44 @@ cp .env.example .env
 
 ## Running the Backend
 
-### Development Mode (with auto-reload)
+### 1. Run Postgres + Chroma with Docker
+
+From the repo root (`RAG-Platform/`):
+
+```bash
+docker compose up -d postgres chromadb
+```
+
+This starts:
+- Postgres on `localhost:5432`
+- ChromaDB on `localhost:8000`
+
+### 2. Run FastAPI backend locally with uvicorn
+
+From `backend/` (with your virtualenv activated):
+
 ```bash
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-### Production Mode
+Swagger: http://localhost:8000/docs
+
+### 3. Run everything via Docker Compose (backend in a container)
+
+From the repo root (`RAG-Platform/`):
+
 ```bash
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
+docker compose up -d --build
+```
+
+Then access the backend at: http://localhost:8001 (Swagger at `/docs`).
+
+### 4. Run tests
+
+From `backend/` (with your virtualenv activated):
+
+```bash
+pytest
 ```
 
 ## API Documentation

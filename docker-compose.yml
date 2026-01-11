@@ -18,6 +18,17 @@ services:
       timeout: 5s
       retries: 5
 
+  chromadb:
+    image: chromadb/chroma:0.5.23
+    container_name: rag_chromadb
+    environment:
+      IS_PERSISTENT: "TRUE"
+      ALLOW_RESET: "TRUE"
+    ports:
+      - "8000:8000"
+    volumes:
+      - chroma_data:/chroma/chroma
+
   backend:
     build:
       context: ./backend
@@ -33,9 +44,13 @@ services:
       POSTGRES_DB: formulation_rag
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
+      CHROMA_HOST: chromadb
+      CHROMA_PORT: 8000
     depends_on:
       postgres:
         condition: service_healthy
+      chromadb:
+        condition: service_started
     ports:
       - "8001:8000"
     volumes:
@@ -44,3 +59,4 @@ services:
 
 volumes:
   postgres_data:
+  chroma_data:

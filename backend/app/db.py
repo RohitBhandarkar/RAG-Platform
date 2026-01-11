@@ -14,10 +14,10 @@ def get_database_url() -> str:
 engine: Engine = create_engine(get_database_url(), pool_pre_ping=True)
 
 
-def check_db_connection() -> bool:
+def check_db_connection() -> tuple[bool, Exception]:
     try:
         with engine.connect() as connection:
             connection.execute(text("SELECT 1"))
-        return True
-    except Exception:
-        return False
+        return (True, None)
+    except Exception as e:
+        return (False, e)
