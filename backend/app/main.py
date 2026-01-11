@@ -1,3 +1,5 @@
+from typing import Literal
+
 from fastapi import APIRouter, FastAPI, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import text
@@ -6,6 +8,7 @@ import pytest
 from app.config import settings
 from app.db import check_db_connection, engine
 from app.chroma_client import check_chroma_connection, query_chroma
+from app.storage import ensure_layout, summarize_layout, list_files
 
 
 app = FastAPI(title="RAG Backend", version="0.1.0")
@@ -49,11 +52,6 @@ def health_vector():
 	return {"service": "chroma", "status": status, "Exception": str(ok[1])}
 
 
-@health_router.get("/storage", summary="Storage health check")
-def health_storage():
-	return {"service": "storage", "status": "not_configured"}
-
-
 @query_router.post("/postgres", summary="Run SQL query on PostgreSQL")
 def run_postgres_query(query: SQLQuery):
 	with engine.connect() as connection:
@@ -75,10 +73,65 @@ def run_chroma_query(body: ChromaQuery):
 		raise HTTPException(status_code=500, detail=f"Chroma query failed: {e}")
 
 
+@health_router.get("/storage", summary="Storage health check")
+def health_storage():
+	try:
+		layout = ensure_layout()
+		# Healthy only if all expected directories already exist
+		all_exist = all(
+			section.get("exists")
+			if isinstance(section, dict) and "exists" in section
+			else all(
+				entry.get("exists")
+				for entry in section.values()
+				if isinstance(entry, dict)
+			)
+			for section in [layout.get("raw", {}), layout.get("processed", {}), layout.get("embeddings", {})]
+		)
+		status = "healthy" if all_exist else "unhealthy"
+		return {"service": "storage", "status": status, "layout": layout}
+	except Exception as e:
+		raise HTTPException(status_code=500, detail=f"Storage health check failed: {e}")
+
+
+@query_router.get("/summary", summary="Summarize document store layout")
+def storage_summary():
+	try:
+		return summarize_layout()
+	except Exception as e:
+		raise HTTPException(status_code=500, detail=f"Storage summary failed: {e}")
+
+
+@query_router.get("/list", summary="List files in document store")
+def storage_list(
+	kind: Literal["raw", "processed"],
+	source: Literal["pubmed", "patents", "fda", "user_uploads"],
+	limit: int = 20,
+):
+	try:
+		files = list_files(kind=kind, source=source, limit=limit)
+		return {"kind": kind, "source": source, "count": len(files), "files": files}
+	except Exception as e:
+		raise HTTPException(status_code=500, detail=f"Listing files failed: {e}")
+
+
 @tests_router.post("/run", summary="Run backend test suite")
 def run_tests():
-	exit_code = pytest.main(["-q"])
-	return {"exit_code": exit_code, "success": exit_code == 0}
+	class TestReport:
+		def __init__(self):
+			self.failed = []
+		
+		def pytest_runtest_logreport(self, report):
+			if report.when == "call" and report.failed:
+				self.failed.append(report.nodeid)
+	
+	reporter = TestReport()
+	exit_code = pytest.main(["-q"], plugins=[reporter])
+	return {
+		"exit_code": exit_code,
+		"success": exit_code == 0,
+		"failed_tests": reporter.failed if reporter.failed else None
+	}
 
 
 app.include_router(health_router)
