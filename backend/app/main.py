@@ -9,6 +9,7 @@ from app.config import settings
 from app.db import check_db_connection, engine
 from app.chroma_client import check_chroma_connection, query_chroma
 from app.storage import ensure_layout, summarize_layout, list_files
+from app.api.routes import documents as documents_routes
 
 
 app = FastAPI(title="RAG Backend", version="0.1.0")
@@ -137,6 +138,7 @@ def run_tests():
 app.include_router(health_router)
 app.include_router(query_router)
 app.include_router(tests_router)
+app.include_router(documents_routes.router)
 
 
 __all__ = ["app"]
