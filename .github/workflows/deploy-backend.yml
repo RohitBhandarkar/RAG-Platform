@@ -76,8 +76,6 @@ jobs:
                 --gpus all \
                 --network host \
                 -e ENVIRONMENT=${{ secrets.ENVIRONMENT }} \
-                -e API_HOST=${{ secrets.API_HOST }} \
-                -e API_PORT=${{ secrets.API_PORT }} \
                 -e LLM_BASE_URL=${{ secrets.LLM_BASE_URL }} \
                 -e LLM_MODEL=${{ secrets.LLM_MODEL }} \
                 -e GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }} \
