@@ -6,7 +6,7 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = Field(None)
     GEMINI_MODEL: str = Field("gemini-pro")
 
-    LLM_BASE_URL: str = Field("http://localhost:11434")
+    LLM_BASE_URL: str = Field("http://localhost:11434/v1")
     LLM_MODEL: str = Field("llama3.1")
 
     ENVIRONMENT: str = Field("development")
