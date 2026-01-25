@@ -75,6 +75,8 @@ jobs:
                 --restart unless-stopped \
                 --gpus all \
                 --network host \
+                -e API_HOST=0.0.0.0 \
+                -e API_PORT=8080 \
                 -e ENVIRONMENT=${{ secrets.ENVIRONMENT }} \
                 -e LLM_BASE_URL=${{ secrets.LLM_BASE_URL }} \
                 -e LLM_MODEL=${{ secrets.LLM_MODEL }} \
