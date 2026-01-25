@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import re
-from PyPDF2 import PdfReader
+from pypdf import PdfReader
 
 
 class PDFParser:

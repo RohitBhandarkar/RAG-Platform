@@ -1,5 +1,5 @@
 import pytest
-from fastapi.testclient import TestClient
+import httpx
 
 from app.main import app
 from app.storage import ensure_layout, summarize_layout, list_files, SOURCES, KINDS
@@ -7,7 +7,9 @@ from app.storage import ensure_layout, summarize_layout, list_files, SOURCES, KI
 
 @pytest.fixture
 def client():
-    return TestClient(app)
+    transport = httpx.ASGITransport(app=app)
+    with httpx.Client(transport=transport, base_url="http://testserver") as client:
+        yield client
 
 
 def test_health_storage_endpoint(client):

@@ -1,12 +1,13 @@
 import pytest
-from fastapi.testclient import TestClient
-
+import httpx
 from app.main import app
 
 
 @pytest.fixture
 def client():
-    return TestClient(app)
+    transport = httpx.ASGITransport(app=app)
+    with httpx.Client(transport=transport, base_url="http://testserver") as client:
+        yield client
 
 
 def test_root_endpoint(client):

@@ -2,11 +2,9 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from typing import Any, Dict, List
-
-import google.generativeai as genai
+from urllib import error, request
 
 from app.config import settings
 
@@ -31,22 +29,16 @@ class LLMService:
 	   - Serialized tables when available.
 	   - Instructions for handling graphs and figure descriptions via
 		 surrounding text only (no image analysis).
-	3. Calls the configured LLM provider to obtain a single, strictly
-	   valid JSON output per paper, representing 1..N formulations.
+	3. Calls Ollama's HTTP API endpoint (locally or on GCP via vLLM)
+	   to obtain a single, strictly valid JSON output per paper.
 	"""
 
-	def __init__(self, provider: str = "gemini", model: str = None) -> None:
-		self.provider = provider
-		# Allow overriding the model, otherwise fall back to settings.GEMINI_MODEL.
-		self.model = model or settings.GEMINI_MODEL
+	def __init__(self, base_url: str | None = None, model: str | None = None) -> None:
+		# Allow overriding base URL/model, otherwise fall back to settings.
+		self.base_url = (base_url or settings.LLM_BASE_URL).rstrip("/")
+		self.model = model or settings.LLM_MODEL
 		self._canonical_schema = self._load_canonical_schema()
 		self._canonical_schema_str = json.dumps(self._canonical_schema, indent=2)
-
-		# Configure Gemini from environment
-		if self.provider == "gemini":
-			api_key = settings.GEMINI_API_KEY or os.getenv("GEMINI_API_KEY")
-			if api_key:
-				genai.configure(api_key=api_key)
 
 	def _load_canonical_schema(self) -> Dict[str, Any]:
 		with CANONICAL_PATH.open("r", encoding="utf-8") as f:
@@ -77,11 +69,7 @@ class LLMService:
 			doc_id=doc_id,
 		)
 
-		if self.provider == "gemini":
-			raw = self._call_gemini(prompt)
-		else:
-			raise NotImplementedError(f"LLM provider '{self.provider}' is not implemented")
-
+		raw = self._call_http_llm(prompt)
 		return self._parse_llm_json(raw)
 
 	def _build_prompt(
@@ -182,28 +170,95 @@ Now return ONLY the filled JSON object, with no explanation or prose.
 
 		return instructions
 
-	def _call_gemini(self, prompt: str) -> str:
-		"""Call Gemini via google-generativeai and return raw text.
+	def _call_http_llm(self, prompt: str) -> str:
+		"""Call Ollama's /api/chat endpoint and return raw text.
 
-		This uses a Gemini text model (``gemini-1.5-pro`` by default). The
-		API key must be provided in the ``GEMINI_API_KEY`` environment
-		variable.
+		Designed for use with Ollama running locally or in Docker.
 		"""
 
-		# ``genai.configure`` is done once in ``__init__`` when the key is
-		# available; if no key is configured we raise a clear error.
-		if not (settings.GEMINI_API_KEY or os.getenv("GEMINI_API_KEY")):
-			raise RuntimeError("GEMINI_API_KEY is not configured for Gemini provider")
+		url = f"{self.base_url}/api/chat"
+		payload = {
+			"model": self.model,
+			"messages": [
+				{
+					"role": "system",
+					"content": (
+						"You are a precise JSON information extraction engine. "
+						"You ONLY output a single JSON object that conforms to the provided schema."
+					),
+				},
+				{"role": "user", "content": prompt},
+			],
+			"stream": False,
+			"options": {
+				"temperature": 0.0,
+				"num_ctx": 32768,  # large context window for long prompts
+			},
+		}
 
-		model = genai.GenerativeModel(self.model)
-		response = model.generate_content(
-			[
-				"You are a precise JSON information extraction engine.",
-				prompt,
-			]
-		)
-		# ``response.text`` is a convenience property with concatenated text.
-		return response.text or ""
+		data = json.dumps(payload).encode("utf-8")
+		req = request.Request(url, data=data, headers={"Content-Type": "application/json"})
+
+		try:
+			with request.urlopen(req, timeout=300) as resp:  # type: ignore[call-arg]
+				body = resp.read().decode("utf-8")
+		except error.HTTPError as exc:  # pragma: no cover - defensive
+			msg = exc.read().decode("utf-8", "ignore")
+			raise RuntimeError(f"LLM HTTP error {exc.code}: {msg}") from exc
+		except error.URLError as exc:  # pragma: no cover - defensive
+			raise RuntimeError(f"Failed to reach LLM server: {exc.reason}") from exc
+
+		obj = json.loads(body)
+		try:
+			# Ollama returns: {"message": {"role": "assistant", "content": "..."}}
+			return obj["message"]["content"]
+		except (KeyError, TypeError) as exc:  # pragma: no cover - defensive
+			raise RuntimeError("Unexpected response format from LLM server") from exc
+
+	def check_health(self) -> Dict[str, Any]:
+		"""Lightweight health check against the LLM endpoint.
+
+		Calls Ollama's ``GET {base_url}/api/tags`` to list available models.
+		It does **not** perform a full generation request, so it is safe to
+		call frequently for monitoring.
+		"""
+
+		url = f"{self.base_url}/api/tags"
+		req = request.Request(url, headers={"Accept": "application/json"})
+
+		try:
+			with request.urlopen(req, timeout=5) as resp:  # type: ignore[call-arg]
+				body = resp.read().decode("utf-8")
+		except error.HTTPError as exc:
+			msg = exc.read().decode("utf-8", "ignore")
+			return {
+				"status": "unhealthy",
+				"base_url": self.base_url,
+				"error": f"HTTP {exc.code}: {msg}",
+			}
+		except error.URLError as exc:
+			return {
+				"status": "unhealthy",
+				"base_url": self.base_url,
+				"error": str(exc.reason),
+			}
+
+		try:
+			payload = json.loads(body)
+		except json.JSONDecodeError:
+			return {
+				"status": "unhealthy",
+				"base_url": self.base_url,
+				"error": "Invalid JSON in /api/tags response",
+			}
+
+		# If we successfully parsed JSON, treat as healthy and include payload
+		# for debugging/inspection.
+		return {
+			"status": "healthy",
+			"base_url": self.base_url,
+			"models_payload": payload,
+		}
 
 	def _parse_llm_json(self, raw: str) -> Dict[str, Any]:
 		"""Parse JSON from LLM output, handling optional code fences."""
