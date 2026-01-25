@@ -63,14 +63,14 @@ jobs:
               gcloud auth configure-docker ${{ env.ARTIFACT_REGISTRY }} --quiet
               
               echo '=== Pulling new image ==='
-              docker pull ${{ env.ARTIFACT_REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/rag-backend/${{ env.IMAGE_NAME }}:${{ github.sha }}
+              sudo docker pull ${{ env.ARTIFACT_REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/rag-backend/${{ env.IMAGE_NAME }}:${{ github.sha }}
               
               echo '=== Stopping old container ==='
-              docker stop rag-backend || true
-              docker rm rag-backend || true
+              sudo docker stop rag-backend || true
+              sudo docker rm rag-backend || true
               
               echo '=== Starting new container ==='
-              docker run -d \
+              sudo docker run -d \
                 --name rag-backend \
                 --restart unless-stopped \
                 --gpus all \
@@ -83,7 +83,7 @@ jobs:
               sleep 5
               
               echo '=== Container status ==='
-              docker ps -a | grep rag-backend
+              sudo docker ps -a | grep rag-backend
             "
       
       - name: Verify deployment
@@ -108,5 +108,5 @@ jobs:
             --tunnel-through-iap \
             --command="
               echo '=== Cleaning up old images (keeping last 5) ==='
-              docker images ${{ env.ARTIFACT_REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/rag-backend/${{ env.IMAGE_NAME }} --format '{{.ID}} {{.CreatedAt}}' | sort -rk 2 | awk 'NR>5{print \$1}' | xargs -r docker rmi || true
+              sudo docker images ${{ env.ARTIFACT_REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/rag-backend/${{ env.IMAGE_NAME }} --format '{{.ID}} {{.CreatedAt}}' | sort -rk 2 | awk 'NR>5{print \$1}' | xargs -r sudo docker rmi || true
             "
