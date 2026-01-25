@@ -3,6 +3,12 @@ from pydantic import Field
 
 
 class Settings(BaseSettings):
+    GEMINI_API_KEY: str = Field(None)
+    GEMINI_MODEL: str = Field("gemini-pro")
+
+    LLM_BASE_URL: str = Field("http://localhost:11434")
+    LLM_MODEL: str = Field("llama3.1")
+
     ENVIRONMENT: str = Field("development")
     API_HOST: str = Field("0.0.0.0")
     API_PORT: int = Field(8000)

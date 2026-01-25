@@ -9,6 +9,8 @@ from app.config import settings
 from app.db import check_db_connection, engine
 from app.chroma_client import check_chroma_connection, query_chroma
 from app.storage import ensure_layout, summarize_layout, list_files
+from app.api.routes import documents as documents_routes
+from app.services.llm_service import LLMService
 
 
 app = FastAPI(title="RAG Backend", version="0.1.0")
@@ -50,6 +52,25 @@ def health_vector():
 	ok = check_chroma_connection()
 	status = "healthy" if ok[0] else "unhealthy"
 	return {"service": "chroma", "status": status, "Exception": str(ok[1])}
+
+
+@health_router.get("/llm", summary="LLM backend health check")
+def health_llm():
+	"""Check connectivity to the configured LLM HTTP endpoint.
+
+	This pings the OpenAI-compatible server's ``/models`` endpoint via
+	:class:`LLMService` and reports whether the service is reachable from
+	this backend (including on GCP VMs).
+	"""
+
+	service = LLMService()
+	info = service.check_health()
+	return {
+		"service": "llm",
+		"status": info.get("status", "unhealthy"),
+		"base_url": info.get("base_url", service.base_url),
+		"details": {k: v for k, v in info.items() if k not in {"status", "base_url"}},
+	}
 
 
 @query_router.post("/postgres", summary="Run SQL query on PostgreSQL")
@@ -137,6 +158,7 @@ def run_tests():
 app.include_router(health_router)
 app.include_router(query_router)
 app.include_router(tests_router)
+app.include_router(documents_routes.router)
 
 
 __all__ = ["app"]
