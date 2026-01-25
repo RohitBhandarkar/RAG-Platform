@@ -34,23 +34,6 @@ jobs:
       
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
-
-      - name: Upload document-store scripts to VM
-        run: |
-          gcloud compute ssh bioct-rag-strat-1 \
-            --zone=${{ secrets.GCP_VM_ZONE }} \
-            --tunnel-through-iap \
-            --command="mkdir -p ~/RAG-Platform/scripts"
-
-          gcloud compute scp scripts/create_document_store.sh \
-            bioct-rag-strat-1:~/RAG-Platform/scripts/create_document_store.sh \
-            --zone=${{ secrets.GCP_VM_ZONE }} \
-            --tunnel-through-iap
-
-          gcloud compute scp scripts/canonical_json_builder.py \
-            bioct-rag-strat-1:~/RAG-Platform/scripts/canonical_json_builder.py \
-            --zone=${{ secrets.GCP_VM_ZONE }} \
-            --tunnel-through-iap
       
       - name: Configure Docker for Artifact Registry
         run: |
@@ -84,9 +67,19 @@ jobs:
               sudo cp -f ~/.docker/config.json /root/.docker/config.json
 
               echo '=== Ensuring document store layout exists ==='
+              if [ ! -f ~/RAG-Platform/scripts/create_document_store.sh ]; then
+                echo 'ERROR: ~/RAG-Platform/scripts/create_document_store.sh not found on VM.'
+                echo 'Clone the repo to ~/RAG-Platform on the VM, or re-enable an upload step in this workflow.'
+                exit 1
+              fi
+              if [ ! -f ~/RAG-Platform/scripts/canonical_json_builder.py ]; then
+                echo 'ERROR: ~/RAG-Platform/scripts/canonical_json_builder.py not found on VM.'
+                echo 'Clone the repo to ~/RAG-Platform on the VM, or re-enable an upload step in this workflow.'
+                exit 1
+              fi
+
               chmod +x ~/RAG-Platform/scripts/create_document_store.sh
-              DOCUMENT_STORE_NON_INTERACTIVE=1 \
-                ~/RAG-Platform/scripts/create_document_store.sh /home/\$USER/RAG-Platform/data
+              ~/RAG-Platform/scripts/create_document_store.sh /home/\$USER/RAG-Platform/data
 
               echo '=== Ensuring vLLM (Llama) container is running ==='
               mkdir -p ~/.cache/huggingface
