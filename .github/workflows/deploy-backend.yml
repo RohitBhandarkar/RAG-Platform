@@ -66,61 +66,27 @@ jobs:
               sudo mkdir -p /root/.docker
               sudo cp -f ~/.docker/config.json /root/.docker/config.json
 
-              echo '=== Ensuring document store layout exists ==='
-              if [ ! -f ~/RAG-Platform/scripts/create_document_store.sh ]; then
-                echo 'ERROR: ~/RAG-Platform/scripts/create_document_store.sh not found on VM.'
-                echo 'Clone the repo to ~/RAG-Platform on the VM, or re-enable an upload step in this workflow.'
-                exit 1
-              fi
-              if [ ! -f ~/RAG-Platform/scripts/canonical_json_builder.py ]; then
-                echo 'ERROR: ~/RAG-Platform/scripts/canonical_json_builder.py not found on VM.'
-                echo 'Clone the repo to ~/RAG-Platform on the VM, or re-enable an upload step in this workflow.'
-                exit 1
-              fi
+              echo '=== Run create_document_store.sh ==='
+              bash ~/RAG-Platform/scripts/create_document_store.sh /home/\$USER/RAG-Platform/data
 
-              chmod +x ~/RAG-Platform/scripts/create_document_store.sh
-              ~/RAG-Platform/scripts/create_document_store.sh /home/\$USER/RAG-Platform/data
-
-              echo '=== Ensuring vLLM (Llama) container is running ==='
-              mkdir -p ~/.cache/huggingface
-              if sudo docker ps --format '{{.Names}}' | grep -qx 'llama31-8b'; then
-                echo 'vLLM container already running.'
-              else
-                echo 'Starting vLLM container...'
-                sudo docker rm -f llama31-8b >/dev/null 2>&1 || true
-                HF_ENV=""
-                if [ -n "${{ secrets.HUGGING_FACE_HUB_TOKEN }}" ]; then
-                  HF_ENV="-e HUGGING_FACE_HUB_TOKEN=${{ secrets.HUGGING_FACE_HUB_TOKEN }}"
-                fi
-
-                # Bind vLLM to localhost only (not publicly exposed)
-                sudo docker run -d \
-                  --name llama31-8b \
-                  --restart unless-stopped \
-                  --gpus all \
-                  -p 127.0.0.1:11434:8000 \
-                  -v ~/.cache/huggingface:/root/.cache/huggingface \
-                  $HF_ENV \
-                  vllm/vllm-openai:latest \
-                  --model ${{ secrets.VLLM_MODEL_ID }} \
-                  --host 0.0.0.0 \
-                  --port 8000 \
-                  --max-model-len 8192 \
-                  --gpu-memory-utilization 0.9
-              fi
-
-              echo '=== Waiting for vLLM to become ready ==='
-              for i in $(seq 1 60); do
-                if curl -sf http://localhost:11434/v1/models >/dev/null; then
-                  echo 'vLLM is ready.'
-                  break
-                fi
-                echo "vLLM not ready yet ($i/60)..."
-                sleep 5
-              done
-              curl -sf http://localhost:11434/v1/models >/dev/null
+              echo '=== Stopping old vLLM container ==='
+                      sudo docker stop llama31-8b || true
+                      sudo docker rm llama31-8b || true
+                      
+                      echo '=== Starting new vLLM container ==='
+                      sudo docker run -d \
+                      --name llama31-8b \
+                      --restart unless-stopped \
+                      --gpus all \
+                      -p 127.0.0.1:11434:8000 \
+                      -v ~/.cache/huggingface:/root/.cache/huggingface \
+                      -e HUGGING_FACE_HUB_TOKEN=${{ secrets.HUGGING_FACE_HUB_TOKEN }} \
+                      vllm/vllm-openai:latest \
+                      --model ${{ secrets.VLLM_MODEL_ID }} \
+                      --host 0.0.0.0 \
+                      --port 8000
               
-              echo '=== Pulling new image ==='
+              echo '=== Pulling backend image ==='
               sudo docker pull ${{ env.ARTIFACT_REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/rag-backend/${{ env.IMAGE_NAME }}:${{ github.sha }}
               
               echo '=== Stopping old container ==='
