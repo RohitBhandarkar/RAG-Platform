@@ -46,3 +46,6 @@ mkdir -p "${PROCESSED_DIR}"/user_uploads
 mkdir -p "${EMBEDDINGS_DIR}"
 
 echo "Document store layout ensured at: ${BASE_DIR}"
+
+echo "Creating canonical JSON schema..."
+python3 "${SCRIPT_DIR}/canonical_json_builder.py" "${BASE_DIR}/canonical.json"

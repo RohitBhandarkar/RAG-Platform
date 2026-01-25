@@ -120,7 +120,7 @@ graph LR
 - **LLM Providers**:
 - **Primary**: Vertex AI (Gemini Pro, PaLM 2)
 - **Fallback**: OpenAI GPT-4, Anthropic Claude
-- **Document Processing**: PyPDF2, python-docx, BeautifulSoup
+- **Document Processing**: pypdf, python-docx, BeautifulSoup
 - **Scientific Computing**: NumPy, Pandas, SciPy
 - **API Client**: httpx, requests, google-cloud libraries
 - **GCP Services**:
