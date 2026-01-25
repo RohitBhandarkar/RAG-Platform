@@ -52,6 +52,12 @@ jobs:
           docker push ${{ env.ARTIFACT_REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/rag-backend/${{ env.IMAGE_NAME }}:${{ github.sha }}
           docker push ${{ env.ARTIFACT_REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/rag-backend/${{ env.IMAGE_NAME }}:latest
       
+      - name: Upload scripts to VM
+        run: |
+          gcloud compute scp --recurse scripts/ bioct-rag-strat-1:~/RAG-Platform/ \
+            --zone=${{ secrets.GCP_VM_ZONE }} \
+            --tunnel-through-iap
+      
       - name: Deploy to GCP VM
         run: |
           gcloud compute ssh bioct-rag-strat-1 \
