@@ -81,7 +81,7 @@ jobs:
                 -e LLM_BASE_URL=${{ secrets.LLM_BASE_URL }} \
                 -e LLM_MODEL=${{ secrets.LLM_MODEL }} \
                 -e GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }} \
-                -v /home/\$USER/RAG-Platform/backend/data:/app/data:ro \
+                -v /home/\$USER/RAG-Platform/data:/app/data:ro \
                 ${{ env.ARTIFACT_REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/rag-backend/${{ env.IMAGE_NAME }}:${{ github.sha }}
               
               echo '=== Waiting for container to start ==='
