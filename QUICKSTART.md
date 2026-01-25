@@ -33,7 +33,7 @@ Watch the deployment at: `https://github.com/YOUR_USERNAME/RAG-Platform/actions`
 
 ```bash
 gcloud compute instances describe bioct-rag-strat-1 \
-  --zone=us-east1-b \
+  --zone=us-central1-c \
   --format='get(networkInterfaces[0].accessConfigs[0].natIP)'
 ```
 
@@ -116,7 +116,7 @@ curl -X POST "http://$EXTERNAL_IP:8080/documents/canonical" \
 
 ```bash
 # SSH to your VM
-gcloud compute ssh bioct-rag-strat-1 --zone=us-east1-b --tunnel-through-iap
+gcloud compute ssh bioct-rag-strat-1 --zone=us-central1-c --tunnel-through-iap
 
 # View backend logs
 docker logs rag-backend
@@ -132,7 +132,7 @@ docker logs --tail 50 rag-backend
 
 ```bash
 # SSH to VM first
-gcloud compute ssh bioct-rag-strat-1 --zone=us-east1-b --tunnel-through-iap
+gcloud compute ssh bioct-rag-strat-1 --zone=us-central1-c --tunnel-through-iap
 
 # Check if containers are running
 docker ps | grep -E 'rag-backend|llama'
@@ -145,7 +145,7 @@ docker inspect rag-backend
 
 ```bash
 # SSH to VM
-gcloud compute ssh bioct-rag-strat-1 --zone=us-east1-b --tunnel-through-iap
+gcloud compute ssh bioct-rag-strat-1 --zone=us-central1-c --tunnel-through-iap
 
 # Restart container
 docker restart rag-backend
@@ -160,7 +160,7 @@ docker start rag-backend
 Check deployed images:
 ```bash
 gcloud artifacts docker images list \
-  us-east1-docker.pkg.dev/YOUR_PROJECT_ID/rag-backend/rag-backend
+  us-central1-docker.pkg.dev/YOUR_PROJECT_ID/rag-backend/rag-backend
 ```
 
 ### Troubleshooting

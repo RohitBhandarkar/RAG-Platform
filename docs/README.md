@@ -33,7 +33,7 @@ See the parent directory for:
 ```bash
 gcloud artifacts repositories create rag-backend \
   --repository-format=docker \
-  --location=us-east1 \
+  --location=us-central1 \
   --description="RAG Platform Backend Docker Images"
 ```
 
@@ -98,10 +98,10 @@ gcloud iam workload-identity-pools providers describe ${PROVIDER_NAME} \
 SSH to your GCP VM and set up Docker authentication:
 
 ```bash
-gcloud compute ssh bioct-rag-strat-1 --zone=us-east1-b --tunnel-through-iap
+gcloud compute ssh bioct-rag-strat-1 --zone=us-central1-c --tunnel-through-iap
 
 # On the VM
-gcloud auth configure-docker us-east1-docker.pkg.dev
+gcloud auth configure-docker us-central1-docker.pkg.dev
 ```
 
 #### Step 4: Set GitHub Secrets
@@ -111,7 +111,7 @@ Add these secrets to your GitHub repository (Settings → Secrets and variables 
 | Secret Name | Value | Example |
 |------------|-------|---------|
 | `GCP_PROJECT_ID` | Your GCP project ID | `bioct-rag-platform` |
-| `GCP_VM_ZONE` | Zone where your VM is located | `us-east1-b` |
+| `GCP_VM_ZONE` | Zone where your VM is located | `us-central1-c` |
 | `GCP_WORKLOAD_IDENTITY_PROVIDER` | Full resource name from Step 2 | `projects/123.../locations/global/workloadIdentityPools/...` |
 | `GCP_SERVICE_ACCOUNT` | Service account email | `github-actions-deployer@PROJECT_ID.iam.gserviceaccount.com` |
 
@@ -146,7 +146,7 @@ Get your VM's external IP:
 
 ```bash
 gcloud compute instances describe bioct-rag-strat-1 \
-  --zone=us-east1-b \
+  --zone=us-central1-c \
   --format='get(networkInterfaces[0].accessConfigs[0].natIP)'
 ```
 

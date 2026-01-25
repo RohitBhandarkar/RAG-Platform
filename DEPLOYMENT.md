@@ -57,7 +57,7 @@
 SSH to your VM and verify vLLM container is running:
 
 ```bash
-gcloud compute ssh bioct-rag-strat-1 --zone=us-east1-b --tunnel-through-iap
+gcloud compute ssh bioct-rag-strat-1 --zone=us-central1-c --tunnel-through-iap
 
 # Check if vLLM container is running
 docker ps | grep llama31-8b
@@ -138,7 +138,7 @@ Watch progress at: `https://github.com/YOUR_USERNAME/RAG-Platform/actions`
 
 ```bash
 gcloud compute instances describe bioct-rag-strat-1 \
-  --zone=us-east1-b \
+  --zone=us-central1-c \
   --format='get(networkInterfaces[0].accessConfigs[0].natIP)'
 ```
 
@@ -188,7 +188,7 @@ curl -X POST "http://EXTERNAL_IP:8080/documents/prompt-preview" \
 **Check**:
 ```bash
 # SSH to VM
-gcloud compute ssh bioct-rag-strat-1 --zone=us-east1-b --tunnel-through-iap
+gcloud compute ssh bioct-rag-strat-1 --zone=us-central1-c --tunnel-through-iap
 
 # Verify vLLM is running
 docker ps | grep llama31-8b
@@ -209,7 +209,7 @@ docker logs rag-backend
 **Check**:
 ```bash
 # SSH to VM
-gcloud compute ssh bioct-rag-strat-1 --zone=us-east1-b --tunnel-through-iap
+gcloud compute ssh bioct-rag-strat-1 --zone=us-central1-c --tunnel-through-iap
 
 # Check if backend is running
 docker ps | grep rag-backend
@@ -264,7 +264,7 @@ If you need to deploy manually without GitHub Actions:
 
 ```bash
 # SSH to VM
-gcloud compute ssh bioct-rag-strat-1 --zone=us-east1-b --tunnel-through-iap
+gcloud compute ssh bioct-rag-strat-1 --zone=us-central1-c --tunnel-through-iap
 
 # Pull latest code
 cd ~/RAG-Platform

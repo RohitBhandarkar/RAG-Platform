@@ -10,8 +10,8 @@ on:
   workflow_dispatch:
 
 env:
-  GCP_REGION: us-east1
-  ARTIFACT_REGISTRY: us-east1-docker.pkg.dev
+  GCP_REGION: us-central1
+  ARTIFACT_REGISTRY: us-central1-docker.pkg.dev
   IMAGE_NAME: rag-backend
 
 jobs:
