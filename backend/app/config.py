@@ -11,7 +11,7 @@ class Settings(BaseSettings):
 
     ENVIRONMENT: str = Field("development")
     API_HOST: str = Field("0.0.0.0")
-    API_PORT: int = Field(8000)
+    API_PORT: int = Field(8080)
     FRONTEND_URL: str = Field("http://localhost:3000")
 
     DOC_STORAGE_ROOT: str = Field("../data")
