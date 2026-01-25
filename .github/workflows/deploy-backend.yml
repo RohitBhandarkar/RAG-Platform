@@ -75,7 +75,12 @@ jobs:
                 --restart unless-stopped \
                 --gpus all \
                 --network host \
-                --env-file /home/\$USER/RAG-Platform/backend/.env \
+                -e ENVIRONMENT=${{ secrets.ENVIRONMENT }} \
+                -e API_HOST=${{ secrets.API_HOST }} \
+                -e API_PORT=${{ secrets.API_PORT }} \
+                -e LLM_BASE_URL=${{ secrets.LLM_BASE_URL }} \
+                -e LLM_MODEL=${{ secrets.LLM_MODEL }} \
+                -e GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }} \
                 -v /home/\$USER/RAG-Platform/backend/data:/app/data:ro \
                 ${{ env.ARTIFACT_REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/rag-backend/${{ env.IMAGE_NAME }}:${{ github.sha }}
               
