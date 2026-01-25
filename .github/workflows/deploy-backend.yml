@@ -89,6 +89,9 @@ jobs:
               
               echo '=== Container status ==='
               sudo docker ps -a | grep rag-backend
+
+              echo '=== Container logs (last 120 lines) ==='
+              sudo docker logs --tail 120 rag-backend || true
             "
       
       - name: Verify deployment
