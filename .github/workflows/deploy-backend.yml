@@ -34,6 +34,23 @@ jobs:
       
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
+
+      - name: Upload document-store scripts to VM
+        run: |
+          gcloud compute ssh bioct-rag-strat-1 \
+            --zone=${{ secrets.GCP_VM_ZONE }} \
+            --tunnel-through-iap \
+            --command="mkdir -p ~/RAG-Platform/scripts"
+
+          gcloud compute scp scripts/create_document_store.sh \
+            bioct-rag-strat-1:~/RAG-Platform/scripts/create_document_store.sh \
+            --zone=${{ secrets.GCP_VM_ZONE }} \
+            --tunnel-through-iap
+
+          gcloud compute scp scripts/canonical_json_builder.py \
+            bioct-rag-strat-1:~/RAG-Platform/scripts/canonical_json_builder.py \
+            --zone=${{ secrets.GCP_VM_ZONE }} \
+            --tunnel-through-iap
       
       - name: Configure Docker for Artifact Registry
         run: |
@@ -61,6 +78,54 @@ jobs:
               set -e
               echo '=== Authenticating Docker with Artifact Registry ==='
               gcloud auth configure-docker ${{ env.ARTIFACT_REGISTRY }} --quiet
+
+              echo '=== Making Docker auth available for sudo ==='
+              sudo mkdir -p /root/.docker
+              sudo cp -f ~/.docker/config.json /root/.docker/config.json
+
+              echo '=== Ensuring document store layout exists ==='
+              chmod +x ~/RAG-Platform/scripts/create_document_store.sh
+              DOCUMENT_STORE_NON_INTERACTIVE=1 \
+                ~/RAG-Platform/scripts/create_document_store.sh /home/\$USER/RAG-Platform/data
+
+              echo '=== Ensuring vLLM (Llama) container is running ==='
+              mkdir -p ~/.cache/huggingface
+              if sudo docker ps --format '{{.Names}}' | grep -qx 'llama31-8b'; then
+                echo 'vLLM container already running.'
+              else
+                echo 'Starting vLLM container...'
+                sudo docker rm -f llama31-8b >/dev/null 2>&1 || true
+                HF_ENV=""
+                if [ -n "${{ secrets.HUGGING_FACE_HUB_TOKEN }}" ]; then
+                  HF_ENV="-e HUGGING_FACE_HUB_TOKEN=${{ secrets.HUGGING_FACE_HUB_TOKEN }}"
+                fi
+
+                # Bind vLLM to localhost only (not publicly exposed)
+                sudo docker run -d \
+                  --name llama31-8b \
+                  --restart unless-stopped \
+                  --gpus all \
+                  -p 127.0.0.1:11434:8000 \
+                  -v ~/.cache/huggingface:/root/.cache/huggingface \
+                  $HF_ENV \
+                  vllm/vllm-openai:latest \
+                  --model ${{ secrets.VLLM_MODEL_ID }} \
+                  --host 0.0.0.0 \
+                  --port 8000 \
+                  --max-model-len 8192 \
+                  --gpu-memory-utilization 0.9
+              fi
+
+              echo '=== Waiting for vLLM to become ready ==='
+              for i in $(seq 1 60); do
+                if curl -sf http://localhost:11434/v1/models >/dev/null; then
+                  echo 'vLLM is ready.'
+                  break
+                fi
+                echo "vLLM not ready yet ($i/60)..."
+                sleep 5
+              done
+              curl -sf http://localhost:11434/v1/models >/dev/null
               
               echo '=== Pulling new image ==='
               sudo docker pull ${{ env.ARTIFACT_REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/rag-backend/${{ env.IMAGE_NAME }}:${{ github.sha }}

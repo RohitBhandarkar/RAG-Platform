@@ -18,17 +18,9 @@ echo "Using base document store directory: ${BASE_DIR}"
 
 if [[ -d "${RAW_DIR}" || -d "${PROCESSED_DIR}" || -d "${EMBEDDINGS_DIR}" ]]; then
   echo "Existing document store layout detected under: ${BASE_DIR}"
-  read -r -p "This will DELETE all contents under raw/, processed/, and embeddings/. Continue? [y/N] " confirm
-  case "${confirm}" in
-    [yY])
-      echo "Removing existing layout..."
-      rm -rf "${RAW_DIR}" "${PROCESSED_DIR}" "${EMBEDDINGS_DIR}"
-      ;;
-    *)
-      echo "Aborting without changes."
-      exit 0
-      ;;
-  esac
+
+  echo "Removing existing layout (no confirmation prompt)..."
+  rm -rf "${RAW_DIR}" "${PROCESSED_DIR}" "${EMBEDDINGS_DIR}"
 fi
 
 echo "Creating document store layout..."
