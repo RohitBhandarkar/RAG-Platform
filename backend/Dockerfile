@@ -19,10 +19,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY backend/app ./app
 
+COPY scripts ./scripts
+
 # Expose port
 EXPOSE 8080
 
-COPY scripts ./scripts
 
 # Run the application
 CMD ["sh", "-c", "uvicorn app.main:app --host ${API_HOST:-0.0.0.0} --port ${API_PORT:-8080}"]
