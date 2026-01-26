@@ -52,11 +52,6 @@ jobs:
           docker push ${{ env.ARTIFACT_REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/rag-backend/${{ env.IMAGE_NAME }}:${{ github.sha }}
           docker push ${{ env.ARTIFACT_REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/rag-backend/${{ env.IMAGE_NAME }}:latest
       
-      - name: Upload scripts to VM
-        run: |
-          gcloud compute scp --recurse scripts/ bioct-rag-strat-1:~/RAG-Platform/ \
-            --zone=${{ secrets.GCP_VM_ZONE }} \
-            --tunnel-through-iap
       
       - name: Deploy to GCP VM
         run: |
@@ -71,26 +66,6 @@ jobs:
               echo '=== Making Docker auth available for sudo ==='
               sudo mkdir -p /root/.docker
               sudo cp -f ~/.docker/config.json /root/.docker/config.json
-
-              echo '=== Run create_document_store.sh ==='
-              bash ~/RAG-Platform/scripts/create_document_store.sh /home/\$USER/RAG-Platform/data
-
-              echo '=== Stopping old vLLM container ==='
-                      sudo docker stop llama31-8b || true
-                      sudo docker rm llama31-8b || true
-                      
-                      echo '=== Starting new vLLM container ==='
-                      sudo docker run -d \
-                      --name llama31-8b \
-                      --restart unless-stopped \
-                      --gpus all \
-                      -p 127.0.0.1:11434:8000 \
-                      -v ~/.cache/huggingface:/root/.cache/huggingface \
-                      -e HUGGING_FACE_HUB_TOKEN=${{ secrets.HUGGING_FACE_HUB_TOKEN }} \
-                      vllm/vllm-openai:latest \
-                      --model ${{ secrets.VLLM_MODEL_ID }} \
-                      --host 0.0.0.0 \
-                      --port 8000
               
               echo '=== Pulling backend image ==='
               sudo docker pull ${{ env.ARTIFACT_REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/rag-backend/${{ env.IMAGE_NAME }}:${{ github.sha }}
@@ -132,9 +107,6 @@ jobs:
             --command="
               echo '=== Checking health endpoint ==='
               curl -f http://localhost:8080/health || exit 1
-              echo ''
-              echo '=== Checking LLM health ==='
-              curl -f http://localhost:8080/health/llm || exit 1
               echo ''
               echo '=== Deployment successful ==='
             "
