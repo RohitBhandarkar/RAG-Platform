@@ -104,18 +104,28 @@ jobs:
                   --name llama31-8b \
                   --restart unless-stopped \
                   --gpus all \
-                  -p 127.0.0.1:11434:8000 \
+                  -p 127.0.0.1:11434:11434 \
                   -v ~/.cache/huggingface:/root/.cache/huggingface \
                   -e HUGGING_FACE_HUB_TOKEN=${{ secrets.HUGGING_FACE_HUB_TOKEN }} \
                   vllm/vllm-openai:latest \
-                  --model meta-llama/Meta-Llama-3.1-8B-Instruct \
+                  meta-llama/Meta-Llama-3.1-8B-Instruct \
                   --host 0.0.0.0 \
-                  --port 8000 \
+                  --port 11434 \
                   --max-model-len 8192 \
-                  --gpu-memory-utilization 0.9
+                  --gpu-memory-utilization 0.85
 
-                echo '=== Waiting for LLM service to start ==='
-                sleep 30
+                echo '=== Waiting for LLM service to start (this may take several minutes for model loading) ==='
+                sleep 120
+                
+                echo '=== Waiting for LLM models endpoint to be ready ==='
+                for i in {1..10}; do
+                  if curl -s http://127.0.0.1:11434/v1/models > /dev/null; then
+                    echo "LLM service is ready after \$i attempts"
+                    break
+                  fi
+                  echo "Attempt \$i: LLM service not ready yet, waiting 30 seconds..."
+                  sleep 30
+                done
               fi
               
               echo '=== Waiting for container to start ==='
@@ -139,8 +149,22 @@ jobs:
               echo ''
               curl -f http://localhost:8080/health/storage || exit 1
               echo ''
-              echo '=== Checking LLM health endpoint ==='
-              curl -f http://localhost:8080/health/llm || exit 1
+              echo '=== Checking LLM health endpoint (with retries) ==='
+              for i in {1..5}; do
+                if curl -f http://localhost:8080/health/llm; then
+                  echo ''
+                  echo 'LLM health check passed'
+                  break
+                elif [ \\\$i -eq 5 ]; then
+                  echo ''
+                  echo 'LLM health check failed after 5 attempts'
+                  exit 1
+                else
+                  echo ''
+                  echo \"LLM health check attempt \\\$i failed, retrying in 30 seconds...\"
+                  sleep 30
+                fi
+              done
               echo ''
               echo '=== Deployment successful ==='
             "
