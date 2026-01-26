@@ -73,9 +73,8 @@ jobs:
               
               echo '=== Running create_document_store.sh ==='
               sudo docker run --rm \
-                -v /home/bioctaveinfo/RAG-Platform/data:/data:rw \
                 ${{ env.ARTIFACT_REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/rag-backend/${{ env.IMAGE_NAME }}:${{ github.sha }} \
-                /scripts/create_document_store.sh
+                /RAG-Platform/scripts/create_document_store.sh
 
 
               echo '=== Stopping old container ==='
@@ -94,7 +93,7 @@ jobs:
                 -e LLM_BASE_URL=${{ secrets.LLM_BASE_URL }} \
                 -e LLM_MODEL=${{ secrets.LLM_MODEL }} \
                 -e GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }} \
-                -v /home/\$USER/RAG-Platform/data:/app/data:ro \
+                -v /home/\$USER/RAG-Platform/data:/RAG-Platform/data:ro \
                 ${{ env.ARTIFACT_REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/rag-backend/${{ env.IMAGE_NAME }}:${{ github.sha }}
               
               echo '=== Waiting for container to start ==='
