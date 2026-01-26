@@ -73,9 +73,9 @@ jobs:
               
               echo '=== Running create_document_store.sh ==='
               sudo docker run --rm \
-                -v /home/bioctaveinfo/RAG-Platform/data:/workspace/data:rw \
+                -v /home/bioctaveinfo/RAG-Platform/data:/data:rw \
                 ${{ env.ARTIFACT_REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/rag-backend/${{ env.IMAGE_NAME }}:${{ github.sha }} \
-                /workspace/scripts/create_document_store.sh
+                /scripts/create_document_store.sh
 
 
               echo '=== Stopping old container ==='

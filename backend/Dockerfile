@@ -19,8 +19,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY backend/app ./app
 
-COPY scripts ./scripts
+# Copy scripts directory to /scripts (since scripts are at root level, not part of app)
+COPY scripts /scripts
 
+RUN chmod +x /scripts/*.sh
 # Expose port
 EXPOSE 8080
 
