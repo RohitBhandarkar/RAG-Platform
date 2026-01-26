@@ -35,6 +35,11 @@ def root():
 	return {"message": "Backend is running", "environment": settings.ENVIRONMENT}
 
 
+@app.get("/health")
+def health():
+	return {"status": "ok"}
+
+
 @health_router.get("/postgres", summary="PostgreSQL health check")
 def health_postgres():
 	ok = check_db_connection()
