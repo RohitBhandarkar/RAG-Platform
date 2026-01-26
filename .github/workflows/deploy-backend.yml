@@ -71,12 +71,11 @@ jobs:
               echo '=== Pulling backend image ==='
               sudo docker pull ${{ env.ARTIFACT_REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/rag-backend/${{ env.IMAGE_NAME }}:${{ github.sha }}
               
-              echo '=== Running create_directories.sh ==='
-              sudo mkdir -p /home/\$USER/RAG-Platform/data
+              echo '=== Running create_document_store.sh ==='
               sudo docker run --rm \
-                -v /home/\$USER/RAG-Platform/data:/data:rw \
+                -v /home/bioctaveinfo/RAG-Platform/data:/workspace/data:rw \
                 ${{ env.ARTIFACT_REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/rag-backend/${{ env.IMAGE_NAME }}:${{ github.sha }} \
-                sh /app/scripts/create_directories.sh /data
+                /workspace/scripts/create_document_store.sh
 
 
               echo '=== Stopping old container ==='
