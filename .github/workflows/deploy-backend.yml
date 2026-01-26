@@ -71,12 +71,6 @@ jobs:
               echo '=== Pulling backend image ==='
               sudo docker pull ${{ env.ARTIFACT_REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/rag-backend/${{ env.IMAGE_NAME }}:${{ github.sha }}
               
-              echo '=== Running create_document_store.sh ==='
-              sudo docker run --rm \
-                ${{ env.ARTIFACT_REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/rag-backend/${{ env.IMAGE_NAME }}:${{ github.sha }} \
-                /RAG-Platform/scripts/create_document_store.sh
-
-
               echo '=== Stopping old container ==='
               sudo docker stop rag-backend || true
               sudo docker rm rag-backend || true
@@ -93,8 +87,10 @@ jobs:
                 -e LLM_BASE_URL=${{ secrets.LLM_BASE_URL }} \
                 -e LLM_MODEL=${{ secrets.LLM_MODEL }} \
                 -e GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }} \
-                -v /home/\$USER/RAG-Platform/data:/RAG-Platform/data:ro \
                 ${{ env.ARTIFACT_REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/rag-backend/${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+              echo '=== Running create_document_store.sh inside container ==='
+              sudo docker exec rag-backend /RAG-Platform/scripts/create_document_store.sh
               
               echo '=== Waiting for container to start ==='
               sleep 5

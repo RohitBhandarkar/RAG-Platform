@@ -13,8 +13,8 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install Python dependencies
-COPY backend/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY backend/requirements.txt ./backend/requirements.txt
+RUN pip install --no-cache-dir -r ./backend/requirements.txt
 
 # Copy application code to maintain local structure
 COPY backend ./backend
@@ -23,9 +23,12 @@ COPY backend ./backend
 COPY scripts ./scripts
 
 RUN chmod +x ./scripts/*.sh
+
+# Change working directory to backend so Python can find the app module
+WORKDIR /RAG-Platform/backend
 # Expose port
 EXPOSE 8080
 
 
 # Run the application
-CMD ["sh", "-c", "uvicorn backend.app.main:app --host ${API_HOST:-0.0.0.0} --port ${API_PORT:-8080}"]
+CMD ["sh", "-c", "uvicorn app.main:app --host ${API_HOST:-0.0.0.0} --port ${API_PORT:-8080}"]
