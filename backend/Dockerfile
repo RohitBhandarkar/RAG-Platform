@@ -1,6 +1,9 @@
 # Backend Dockerfile
 FROM python:3.11-slim
 
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
 WORKDIR /app
 
 # Install system dependencies
@@ -18,6 +21,8 @@ COPY ./app ./app
 
 # Expose port
 EXPOSE 8080
+
+COPY scripts ../scripts
 
 # Run the application
 CMD ["sh", "-c", "uvicorn app.main:app --host ${API_HOST:-0.0.0.0} --port ${API_PORT:-8080}"]
