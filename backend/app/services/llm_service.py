@@ -135,9 +135,10 @@ SCHEMA (example structure; follow these keys and nesting exactly):
 {self._canonical_schema_str}
 
 RULES:
-- Output a SINGLE JSON object only, with the exact schema above.
-- Include an array of formulations if multiple formulations are
-  described in the paper.
+- Output EXACTLY ONE JSON object with the structure shown in the schema above.
+- If multiple formulations exist, include them in the formulations array within the SINGLE JSON object.
+- DO NOT output multiple separate JSON objects.
+- DO NOT add any text, explanations, or comments before or after the JSON.
 - For fields that are not reported or not applicable, use null, empty
   strings, or empty arrays as appropriate, but DO NOT invent values.
 - Use numeric values where possible; preserve units and semantics in
@@ -149,6 +150,8 @@ RULES:
   "Figure 2 shows sustained dissolution over 24 h") to infer numeric or
   qualitative trends. You MUST NOT assume or guess values from images
   that are not described in text.
+
+CRITICAL: Return ONLY the JSON object. No additional text or objects.
 
 DOCUMENT CONTEXT:
 - Source: {source}
@@ -409,15 +412,37 @@ Now return ONLY the filled JSON object, with no explanation or prose.
 		
 		# Try to extract JSON if there's text before/after
 		# Look for content between { and }
-		if not text.startswith("{"):
+		if not text.startswith("{") and not text.startswith("["):
 			start_idx = text.find("{")
+			if start_idx == -1:
+				start_idx = text.find("[")
 			if start_idx != -1:
 				text = text[start_idx:]
 		
-		if not text.endswith("}"):
-			end_idx = text.rfind("}")
-			if end_idx != -1:
-				text = text[:end_idx + 1]
+		# Find the end of the first complete JSON object/array
+		# This handles "extra data" errors when LLM adds content after JSON
+		if text.startswith("{"):
+			# Find matching closing brace
+			brace_count = 0
+			for i, char in enumerate(text):
+				if char == "{":
+					brace_count += 1
+				elif char == "}":
+					brace_count -= 1
+					if brace_count == 0:
+						text = text[:i + 1]
+						break
+		elif text.startswith("["):
+			# Find matching closing bracket
+			bracket_count = 0
+			for i, char in enumerate(text):
+				if char == "[":
+					bracket_count += 1
+				elif char == "]":
+					bracket_count -= 1
+					if bracket_count == 0:
+						text = text[:i + 1]
+						break
 
 		try:
 			return json.loads(text)
