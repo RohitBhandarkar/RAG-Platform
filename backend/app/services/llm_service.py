@@ -253,7 +253,8 @@ Now return ONLY the filled JSON object, with no explanation or prose.
 			],
 			"generationConfig": {
 				"temperature": 0.0,
-				"maxOutputTokens": 8192,
+				"maxOutputTokens": 16384,
+				"responseMimeType": "application/json",
 			},
 		}
 
@@ -391,18 +392,43 @@ Now return ONLY the filled JSON object, with no explanation or prose.
 		}
 
 	def _parse_llm_json(self, raw: str) -> Dict[str, Any]:
-		"""Parse JSON from LLM output, handling optional code fences."""
+		"""Parse JSON from LLM output, handling optional code fences and common formatting issues."""
 
 		text = raw.strip()
+		
+		# Remove markdown code fences
 		if text.startswith("```"):
-			# Strip markdown code fences
-			lines = [ln for ln in text.splitlines() if not ln.strip().startswith("```")]
+			lines = text.splitlines()
+			# Remove first line if it's a fence (```json or ```)
+			if lines[0].strip().startswith("```"):
+				lines = lines[1:]
+			# Remove last line if it's a fence
+			if lines and lines[-1].strip() == "```":
+				lines = lines[:-1]
 			text = "\n".join(lines).strip()
+		
+		# Try to extract JSON if there's text before/after
+		# Look for content between { and }
+		if not text.startswith("{"):
+			start_idx = text.find("{")
+			if start_idx != -1:
+				text = text[start_idx:]
+		
+		if not text.endswith("}"):
+			end_idx = text.rfind("}")
+			if end_idx != -1:
+				text = text[:end_idx + 1]
 
 		try:
 			return json.loads(text)
-		except json.JSONDecodeError as exc:  # pragma: no cover - defensive
-			raise ValueError(f"LLM returned invalid JSON: {exc}") from exc
+		except json.JSONDecodeError as exc:
+			# Provide more helpful error message with context
+			error_context = text[max(0, exc.pos - 100):min(len(text), exc.pos + 100)]
+			raise ValueError(
+				f"LLM returned invalid JSON at position {exc.pos}: {exc.msg}\n"
+				f"Context: ...{error_context}...\n"
+				f"Full response length: {len(raw)} chars"
+			) from exc
 
 
 __all__ = ["LLMService"]
