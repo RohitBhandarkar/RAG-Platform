@@ -85,7 +85,7 @@ jobs:
                 -e API_PORT=8080 \
                 -e ENVIRONMENT=${{ secrets.ENVIRONMENT }} \
                 -e LLM_BASE_URL=vertex \
-                -e LLM_MODEL=gemini-1.5-pro \
+                -e LLM_MODEL=gemini-2.5-pro \
                 -e GOOGLE_CLOUD_PROJECT=${{ secrets.GCP_PROJECT_ID }} \
                 -e VERTEX_LOCATION=${{ env.GCP_REGION }} \
                 -e GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }} \

@@ -229,8 +229,8 @@ Now return ONLY the filled JSON object, with no explanation or prose.
 		if not project:
 			raise RuntimeError("GOOGLE_CLOUD_PROJECT must be set to use Vertex AI")
 
-		# Use the model from settings (e.g., gemini-1.5-pro)
-		model = self.model or "gemini-1.5-pro-002"
+		# Use the model from settings (e.g., gemini-2.5-pro)
+		model = self.model or "gemini-2.5-pro"
 
 		# Vertex AI publisher model endpoint
 		url = (
@@ -288,6 +288,8 @@ Now return ONLY the filled JSON object, with no explanation or prose.
 		if self.base_url == "vertex":
 			try:
 				project = settings.GOOGLE_CLOUD_PROJECT
+				location = settings.VERTEX_LOCATION or "us-central1"
+				
 				if not project:
 					return {
 						"status": "unhealthy",
@@ -295,19 +297,53 @@ Now return ONLY the filled JSON object, with no explanation or prose.
 						"error": "GOOGLE_CLOUD_PROJECT not configured",
 					}
 
-				# Verify credentials can be obtained
+				# Get credentials
 				credentials, _ = google.auth.default(
 					scopes=["https://www.googleapis.com/auth/cloud-platform"]
 				)
 				credentials.refresh(GoogleAuthRequest())
 
+				# Actually test the model endpoint with a minimal request
+				model = self.model or "gemini-2.5-pro"
+				url = (
+					f"https://{location}-aiplatform.googleapis.com/v1/projects/{project}"
+					f"/locations/{location}/publishers/google/models/{model}:generateContent"
+				)
+				
+				test_payload = {
+					"contents": [{"role": "user", "parts": [{"text": "test"}]}],
+					"generationConfig": {"maxOutputTokens": 5},
+				}
+				
+				resp = requests.post(
+					url,
+					headers={
+						"Authorization": f"Bearer {credentials.token}",
+						"Content-Type": "application/json",
+					},
+					json=test_payload,
+					timeout=10,
+				)
+				
+				if resp.status_code >= 400:
+					error_detail = resp.json().get("error", {})
+					return {
+						"status": "unhealthy",
+						"base_url": self.base_url,
+						"mode": "vertex",
+						"model": model,
+						"project": project,
+						"location": location,
+						"error": f"Model test failed: {error_detail.get('message', resp.text)}",
+					}
+
 				return {
 					"status": "healthy",
 					"base_url": self.base_url,
 					"mode": "vertex",
-					"model": self.model,
+					"model": model,
 					"project": project,
-					"location": settings.VERTEX_LOCATION,
+					"location": location,
 				}
 			except Exception as exc:
 				return {
