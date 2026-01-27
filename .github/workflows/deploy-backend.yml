@@ -84,49 +84,15 @@ jobs:
                 -e API_HOST=0.0.0.0 \
                 -e API_PORT=8080 \
                 -e ENVIRONMENT=${{ secrets.ENVIRONMENT }} \
-                -e LLM_BASE_URL=${{ secrets.LLM_BASE_URL }} \
-                -e LLM_MODEL=${{ secrets.LLM_MODEL }} \
+                -e LLM_BASE_URL=vertex \
+                -e LLM_MODEL=gemini-1.5-pro \
+                -e GOOGLE_CLOUD_PROJECT=${{ secrets.GCP_PROJECT_ID }} \
+                -e VERTEX_LOCATION=${{ env.GCP_REGION }} \
                 -e GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }} \
                 ${{ env.ARTIFACT_REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/rag-backend/${{ env.IMAGE_NAME }}:${{ github.sha }}
 
               echo '=== Running create_document_store.sh inside container ==='
               sudo docker exec rag-backend /RAG-Platform/scripts/create_document_store.sh
-
-              echo '=== Checking LLM service container ==='
-              if sudo docker ps --filter 'name=llama31-8b' --filter 'status=running' | grep -q llama31-8b; then
-                echo 'LLM container llama31-8b is already running'
-              else
-                echo 'Starting LLM container llama31-8b'
-                sudo docker stop llama31-8b || true
-                sudo docker rm llama31-8b || true
-                
-                sudo docker run -d \
-                  --name llama31-8b \
-                  --restart unless-stopped \
-                  --gpus all \
-                  -p 127.0.0.1:11434:11434 \
-                  -v ~/.cache/huggingface:/root/.cache/huggingface \
-                  -e HUGGING_FACE_HUB_TOKEN=${{ secrets.HUGGING_FACE_HUB_TOKEN }} \
-                  vllm/vllm-openai:latest \
-                  meta-llama/Meta-Llama-3.1-8B-Instruct \
-                  --host 0.0.0.0 \
-                  --port 11434 \
-                  --max-model-len 8192 \
-                  --gpu-memory-utilization 0.85
-
-                echo '=== Waiting for LLM service to start (this may take several minutes for model loading) ==='
-                sleep 120
-                
-                echo '=== Waiting for LLM models endpoint to be ready ==='
-                for i in {1..10}; do
-                  if curl -s http://127.0.0.1:11434/v1/models > /dev/null; then
-                    echo 'LLM service is ready after \$i attempts'
-                    break
-                  fi
-                  echo 'Attempt \$i: LLM service not ready yet, waiting 30 seconds...'
-                  sleep 30
-                done
-              fi
               
               echo '=== Waiting for container to start ==='
               sleep 5
@@ -149,22 +115,8 @@ jobs:
               echo ''
               curl -f http://localhost:8080/health/storage || exit 1
               echo ''
-              echo '=== Checking LLM health endpoint (with retries) ==='
-              for i in {1..5}; do
-                if curl -f http://localhost:8080/health/llm; then
-                  echo ''
-                  echo 'LLM health check passed'
-                  break
-                elif [ \\\$i -eq 5 ]; then
-                  echo ''
-                  echo 'LLM health check failed after 5 attempts'
-                  exit 1
-                else
-                  echo ''
-                  echo \"LLM health check attempt \\\$i failed, retrying in 30 seconds...\"
-                  sleep 30
-                fi
-              done
+              echo '=== Checking LLM health endpoint ==='
+              curl -f http://localhost:8080/health/llm || exit 1
               echo ''
               echo '=== Deployment successful ==='
             "

@@ -6,6 +6,10 @@ from pathlib import Path
 from typing import Any, Dict, List
 from urllib import error, request
 
+import requests
+import google.auth
+from google.auth.transport.requests import Request as GoogleAuthRequest
+
 from app.config import settings
 
 
@@ -171,10 +175,14 @@ Now return ONLY the filled JSON object, with no explanation or prose.
 		return instructions
 
 	def _call_http_llm(self, prompt: str) -> str:
-		"""Call vLLM's OpenAI-compatible /v1/chat/completions endpoint and return raw text.
+		"""Call either vLLM's OpenAI-compatible endpoint or Vertex AI Gemini.
 
-		Designed for use with vLLM running locally or in Docker on GCP.
+		If base_url is 'vertex', uses Vertex AI Gemini API.
+		Otherwise, uses vLLM's OpenAI-compatible endpoint.
 		"""
+
+		if self.base_url == "vertex":
+			return self._call_vertex_gemini(prompt)
 
 		url = f"{self.base_url}/chat/completions"
 		payload = {
@@ -212,14 +220,103 @@ Now return ONLY the filled JSON object, with no explanation or prose.
 		except (KeyError, TypeError, IndexError) as exc:  # pragma: no cover - defensive
 			raise RuntimeError("Unexpected response format from LLM server") from exc
 
+	def _call_vertex_gemini(self, prompt: str) -> str:
+		"""Call Vertex AI Gemini API for text generation."""
+
+		project = settings.GOOGLE_CLOUD_PROJECT
+		location = settings.VERTEX_LOCATION or "us-central1"
+
+		if not project:
+			raise RuntimeError("GOOGLE_CLOUD_PROJECT must be set to use Vertex AI")
+
+		# Use the model from settings (e.g., gemini-1.5-pro)
+		model = self.model or "gemini-1.5-pro"
+
+		# Vertex AI publisher model endpoint
+		url = (
+			f"https://{location}-aiplatform.googleapis.com/v1/projects/{project}"
+			f"/locations/{location}/publishers/google/models/{model}:generateContent"
+		)
+
+		# Get credentials with Application Default Credentials
+		credentials, _ = google.auth.default(
+			scopes=["https://www.googleapis.com/auth/cloud-platform"]
+		)
+		credentials.refresh(GoogleAuthRequest())
+
+		payload = {
+			"contents": [
+				{
+					"role": "user",
+					"parts": [{"text": prompt}],
+				}
+			],
+			"generationConfig": {
+				"temperature": 0.0,
+				"maxOutputTokens": 8192,
+			},
+		}
+
+		resp = requests.post(
+			url,
+			headers={
+				"Authorization": f"Bearer {credentials.token}",
+				"Content-Type": "application/json",
+			},
+			json=payload,
+			timeout=300,
+		)
+
+		if resp.status_code >= 400:
+			raise RuntimeError(f"Vertex AI error {resp.status_code}: {resp.text}")
+
+		obj = resp.json()
+		try:
+			# Vertex response: candidates[0].content.parts[0].text
+			return obj["candidates"][0]["content"]["parts"][0]["text"]
+		except (KeyError, TypeError, IndexError) as exc:
+			raise RuntimeError("Unexpected response format from Vertex AI") from exc
+
 	def check_health(self) -> Dict[str, Any]:
 		"""Lightweight health check against the LLM endpoint.
 
-		Calls vLLM's ``GET {base_url}/models`` to list available models.
-		It does **not** perform a full generation request, so it is safe to
-		call frequently for monitoring.
+		For Vertex AI: verifies authentication and project configuration.
+		For vLLM: calls GET {base_url}/models to list available models.
 		"""
 
+		# Vertex AI health check
+		if self.base_url == "vertex":
+			try:
+				project = settings.GOOGLE_CLOUD_PROJECT
+				if not project:
+					return {
+						"status": "unhealthy",
+						"base_url": self.base_url,
+						"error": "GOOGLE_CLOUD_PROJECT not configured",
+					}
+
+				# Verify credentials can be obtained
+				credentials, _ = google.auth.default(
+					scopes=["https://www.googleapis.com/auth/cloud-platform"]
+				)
+				credentials.refresh(GoogleAuthRequest())
+
+				return {
+					"status": "healthy",
+					"base_url": self.base_url,
+					"mode": "vertex",
+					"model": self.model,
+					"project": project,
+					"location": settings.VERTEX_LOCATION,
+				}
+			except Exception as exc:
+				return {
+					"status": "unhealthy",
+					"base_url": self.base_url,
+					"error": str(exc),
+				}
+
+		# vLLM health check
 		url = f"{self.base_url}/models"
 		req = request.Request(url, headers={"Accept": "application/json"})
 
