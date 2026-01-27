@@ -1,4 +1,5 @@
 from typing import Literal
+import logging
 
 from fastapi import APIRouter, FastAPI, HTTPException
 from pydantic import BaseModel
@@ -12,6 +13,17 @@ from app.storage import ensure_layout, summarize_layout, list_files
 from app.api.routes import documents as documents_routes
 from app.services.llm_service import LLMService
 
+
+# Configure logging
+logging.basicConfig(
+	level=logging.DEBUG,
+	format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+	handlers=[logging.StreamHandler()]
+)
+
+# Set specific logger levels
+logging.getLogger("app.services.llm_service").setLevel(logging.DEBUG)
+logging.getLogger("app.data.ingestion.document_processor").setLevel(logging.INFO)
 
 app = FastAPI(title="RAG Backend", version="0.1.0")
 
