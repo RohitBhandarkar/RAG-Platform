@@ -230,7 +230,7 @@ Now return ONLY the filled JSON object, with no explanation or prose.
 			raise RuntimeError("GOOGLE_CLOUD_PROJECT must be set to use Vertex AI")
 
 		# Use the model from settings (e.g., gemini-1.5-pro)
-		model = self.model or "gemini-1.5-pro"
+		model = self.model or "gemini-1.5-pro-002"
 
 		# Vertex AI publisher model endpoint
 		url = (
