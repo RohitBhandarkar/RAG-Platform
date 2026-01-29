@@ -41,9 +41,9 @@ jobs:
           gcloud auth configure-docker ${{ env.ARTIFACT_REGISTRY }}
       
       - name: Build Docker image
-        working-directory: backend
         run: |
           docker build \
+            -f backend/Dockerfile \
             -t ${{ env.ARTIFACT_REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/rag-backend/${{ env.IMAGE_NAME }}:${{ github.sha }} \
             -t ${{ env.ARTIFACT_REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/rag-backend/${{ env.IMAGE_NAME }}:latest \
             .
@@ -71,14 +71,6 @@ jobs:
               echo '=== Pulling backend image ==='
               sudo docker pull ${{ env.ARTIFACT_REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/rag-backend/${{ env.IMAGE_NAME }}:${{ github.sha }}
               
-              echo '=== Running create_directories.sh ==='
-              sudo mkdir -p /home/\$USER/RAG-Platform/data
-              sudo docker run --rm \
-                -v /home/\$USER/RAG-Platform/data:/data:rw \
-                ${{ env.ARTIFACT_REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/rag-backend/${{ env.IMAGE_NAME }}:${{ github.sha }} \
-                sh /app/scripts/create_directories.sh /data
-
-
               echo '=== Stopping old container ==='
               sudo docker stop rag-backend || true
               sudo docker rm rag-backend || true
@@ -92,11 +84,15 @@ jobs:
                 -e API_HOST=0.0.0.0 \
                 -e API_PORT=8080 \
                 -e ENVIRONMENT=${{ secrets.ENVIRONMENT }} \
-                -e LLM_BASE_URL=${{ secrets.LLM_BASE_URL }} \
-                -e LLM_MODEL=${{ secrets.LLM_MODEL }} \
+                -e LLM_BASE_URL=vertex \
+                -e LLM_MODEL=gemini-2.5-pro \
+                -e GOOGLE_CLOUD_PROJECT=${{ secrets.GCP_PROJECT_ID }} \
+                -e VERTEX_LOCATION=${{ env.GCP_REGION }} \
                 -e GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }} \
-                -v /home/\$USER/RAG-Platform/data:/app/data:ro \
                 ${{ env.ARTIFACT_REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/rag-backend/${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+              echo '=== Running create_document_store.sh inside container ==='
+              sudo docker exec rag-backend /RAG-Platform/scripts/create_document_store.sh
               
               echo '=== Waiting for container to start ==='
               sleep 5
@@ -114,10 +110,13 @@ jobs:
             --zone=${{ secrets.GCP_VM_ZONE }} \
             --tunnel-through-iap \
             --command="
-              echo '=== Checking health endpoint ==='
+              echo '=== Checking backend health endpoint ==='
               curl -f http://localhost:8080/health || exit 1
               echo ''
               curl -f http://localhost:8080/health/storage || exit 1
+              echo ''
+              echo '=== Checking LLM health endpoint ==='
+              curl -f http://localhost:8080/health/llm || exit 1
               echo ''
               echo '=== Deployment successful ==='
             "

@@ -8,3 +8,5 @@ chromadb==0.5.23
 pytest==7.4.4
 pypdf>=3.0.0,<5.0.0
 python-multipart>=0.0.20,<0.1.0
+google-auth>=2.30.0
+requests>=2.32.0

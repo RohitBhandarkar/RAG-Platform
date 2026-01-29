@@ -2,12 +2,21 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any, Dict, List
 from urllib import error, request
 
+import requests
+import google.auth
+from google.auth.transport.requests import Request as GoogleAuthRequest
+
 from app.config import settings
 
+
+# Set up logger for this module
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 # Project root (RAG-Platform), used to locate shared resources such as
 # data/canonical.json. ``__file__`` is backend/app/services/llm_service.py,
@@ -59,6 +68,8 @@ class LLMService:
 		This method is synchronous by design; callers may wrap it in an
 		async context if needed.
 		"""
+		logger.info(f"Starting canonical generation for doc_id={doc_id}, source={source}")
+		logger.debug(f"Document has {len(text_chunks)} text chunks and {len(table_chunks)} table chunks")
 
 		prompt = self._build_prompt(
 			parsed_document=parsed_document,
@@ -68,9 +79,20 @@ class LLMService:
 			source=source,
 			doc_id=doc_id,
 		)
+		
+		logger.info(f"Built prompt for {doc_id} (length: {len(prompt)} chars)")
+		logger.debug(f"Prompt preview (first 500 chars): {prompt[:500]}...")
 
 		raw = self._call_http_llm(prompt)
-		return self._parse_llm_json(raw)
+		
+		logger.info(f"Received LLM response for {doc_id} (length: {len(raw)} chars)")
+		logger.debug(f"Raw LLM response: {raw}")
+		
+		result = self._parse_llm_json(raw)
+		logger.info(f"Successfully parsed canonical JSON for {doc_id}")
+		logger.debug(f"Parsed result keys: {list(result.keys())}")
+		
+		return result
 
 	def _build_prompt(
 		self,
@@ -131,9 +153,10 @@ SCHEMA (example structure; follow these keys and nesting exactly):
 {self._canonical_schema_str}
 
 RULES:
-- Output a SINGLE JSON object only, with the exact schema above.
-- Include an array of formulations if multiple formulations are
-  described in the paper.
+- Output EXACTLY ONE JSON object with the structure shown in the schema above.
+- If multiple formulations exist, include them in the formulations array within the SINGLE JSON object.
+- DO NOT output multiple separate JSON objects.
+- DO NOT add any text, explanations, or comments before or after the JSON.
 - For fields that are not reported or not applicable, use null, empty
   strings, or empty arrays as appropriate, but DO NOT invent values.
 - Use numeric values where possible; preserve units and semantics in
@@ -145,6 +168,8 @@ RULES:
   "Figure 2 shows sustained dissolution over 24 h") to infer numeric or
   qualitative trends. You MUST NOT assume or guess values from images
   that are not described in text.
+
+CRITICAL: Return ONLY the JSON object. No additional text or objects.
 
 DOCUMENT CONTEXT:
 - Source: {source}
@@ -171,12 +196,18 @@ Now return ONLY the filled JSON object, with no explanation or prose.
 		return instructions
 
 	def _call_http_llm(self, prompt: str) -> str:
-		"""Call vLLM's OpenAI-compatible /v1/chat/completions endpoint and return raw text.
+		"""Call either vLLM's OpenAI-compatible endpoint or Vertex AI Gemini.
 
-		Designed for use with vLLM running locally or in Docker on GCP.
+		If base_url is 'vertex', uses Vertex AI Gemini API.
+		Otherwise, uses vLLM's OpenAI-compatible endpoint.
 		"""
+		logger.info(f"Calling LLM with base_url={self.base_url}, model={self.model}")
+
+		if self.base_url == "vertex":
+			return self._call_vertex_gemini(prompt)
 
 		url = f"{self.base_url}/chat/completions"
+		logger.debug(f"Using OpenAI-compatible endpoint: {url}")
 		payload = {
 			"model": self.model,
 			"messages": [
@@ -212,14 +243,163 @@ Now return ONLY the filled JSON object, with no explanation or prose.
 		except (KeyError, TypeError, IndexError) as exc:  # pragma: no cover - defensive
 			raise RuntimeError("Unexpected response format from LLM server") from exc
 
+	def _call_vertex_gemini(self, prompt: str) -> str:
+		"""Call Vertex AI Gemini API for text generation."""
+		
+		logger.info("Starting Vertex AI Gemini call")
+
+		project = settings.GOOGLE_CLOUD_PROJECT
+		location = settings.VERTEX_LOCATION or "us-central1"
+
+		if not project:
+			logger.error("GOOGLE_CLOUD_PROJECT not set for Vertex AI")
+			raise RuntimeError("GOOGLE_CLOUD_PROJECT must be set to use Vertex AI")
+
+		# Use the model from settings (e.g., gemini-2.5-pro)
+		model = self.model or "gemini-2.5-pro"
+		
+		logger.info(f"Vertex AI config: project={project}, location={location}, model={model}")
+
+		# Vertex AI publisher model endpoint
+		url = (
+			f"https://{location}-aiplatform.googleapis.com/v1/projects/{project}"
+			f"/locations/{location}/publishers/google/models/{model}:generateContent"
+		)
+		
+		logger.debug(f"Vertex AI endpoint: {url}")
+
+		# Get credentials with Application Default Credentials
+		logger.debug("Obtaining Google Cloud credentials")
+		credentials, _ = google.auth.default(
+			scopes=["https://www.googleapis.com/auth/cloud-platform"]
+		)
+		credentials.refresh(GoogleAuthRequest())
+		logger.debug("Credentials obtained and refreshed")
+
+		payload = {
+			"contents": [
+				{
+					"role": "user",
+					"parts": [{"text": prompt}],
+				}
+			],
+			"generationConfig": {
+				"temperature": 0.0,
+				"maxOutputTokens": 16384,
+				"responseMimeType": "application/json",
+			},
+		}
+		
+		logger.debug(f"Request payload config: temperature=0.0, maxOutputTokens=16384, responseMimeType=application/json")
+		logger.debug(f"Prompt length: {len(prompt)} chars")
+
+		logger.info("Sending request to Vertex AI")
+		resp = requests.post(
+			url,
+			headers={
+				"Authorization": f"Bearer {credentials.token}",
+				"Content-Type": "application/json",
+			},
+			json=payload,
+			timeout=300,
+		)
+
+		logger.info(f"Received response from Vertex AI: status_code={resp.status_code}")
+
+		if resp.status_code >= 400:
+			logger.error(f"Vertex AI error response: {resp.text}")
+			raise RuntimeError(f"Vertex AI error {resp.status_code}: {resp.text}")
+
+		obj = resp.json()
+		logger.debug(f"Response JSON keys: {list(obj.keys())}")
+		
+		try:
+			# Vertex response: candidates[0].content.parts[0].text
+			text_response = obj["candidates"][0]["content"]["parts"][0]["text"]
+			logger.info(f"Successfully extracted text response (length: {len(text_response)} chars)")
+			logger.debug(f"Response preview (first 500 chars): {text_response[:500]}...")
+			return text_response
+		except (KeyError, TypeError, IndexError) as exc:
+			logger.error(f"Failed to parse Vertex AI response structure: {exc}")
+			logger.error(f"Response JSON: {json.dumps(obj, indent=2)[:1000]}...")
+			raise RuntimeError("Unexpected response format from Vertex AI") from exc
+
 	def check_health(self) -> Dict[str, Any]:
 		"""Lightweight health check against the LLM endpoint.
 
-		Calls vLLM's ``GET {base_url}/models`` to list available models.
-		It does **not** perform a full generation request, so it is safe to
-		call frequently for monitoring.
+		For Vertex AI: verifies authentication and project configuration.
+		For vLLM: calls GET {base_url}/models to list available models.
 		"""
 
+		# Vertex AI health check
+		if self.base_url == "vertex":
+			try:
+				project = settings.GOOGLE_CLOUD_PROJECT
+				location = settings.VERTEX_LOCATION or "us-central1"
+				
+				if not project:
+					return {
+						"status": "unhealthy",
+						"base_url": self.base_url,
+						"error": "GOOGLE_CLOUD_PROJECT not configured",
+					}
+
+				# Get credentials
+				credentials, _ = google.auth.default(
+					scopes=["https://www.googleapis.com/auth/cloud-platform"]
+				)
+				credentials.refresh(GoogleAuthRequest())
+
+				# Actually test the model endpoint with a minimal request
+				model = self.model or "gemini-2.5-pro"
+				url = (
+					f"https://{location}-aiplatform.googleapis.com/v1/projects/{project}"
+					f"/locations/{location}/publishers/google/models/{model}:generateContent"
+				)
+				
+				test_payload = {
+					"contents": [{"role": "user", "parts": [{"text": "test"}]}],
+					"generationConfig": {"maxOutputTokens": 5},
+				}
+				
+				resp = requests.post(
+					url,
+					headers={
+						"Authorization": f"Bearer {credentials.token}",
+						"Content-Type": "application/json",
+					},
+					json=test_payload,
+					timeout=10,
+				)
+				
+				if resp.status_code >= 400:
+					error_detail = resp.json().get("error", {})
+					return {
+						"status": "unhealthy",
+						"base_url": self.base_url,
+						"mode": "vertex",
+						"model": model,
+						"project": project,
+						"location": location,
+						"error": f"Model test failed: {error_detail.get('message', resp.text)}",
+					}
+
+				return {
+					"status": "healthy",
+					"base_url": self.base_url,
+					"mode": "vertex",
+					"model": model,
+					"project": project,
+					"location": location,
+				}
+			except Exception as exc:
+				return {
+					"status": "unhealthy",
+					"base_url": self.base_url,
+					"error": str(exc),
+				}
+
+		# vLLM health check
 		url = f"{self.base_url}/models"
 		req = request.Request(url, headers={"Accept": "application/json"})
 
@@ -258,18 +438,95 @@ Now return ONLY the filled JSON object, with no explanation or prose.
 		}
 
 	def _parse_llm_json(self, raw: str) -> Dict[str, Any]:
-		"""Parse JSON from LLM output, handling optional code fences."""
+		"""Parse JSON from LLM output, handling optional code fences and common formatting issues."""
+		
+		logger.info(f"Starting JSON parsing (raw length: {len(raw)} chars)")
+		logger.debug(f"Raw response (first 1000 chars): {raw[:1000]}")
 
 		text = raw.strip()
+		logger.debug(f"After strip (length: {len(text)} chars)")
+		
+		# Remove markdown code fences
 		if text.startswith("```"):
-			# Strip markdown code fences
-			lines = [ln for ln in text.splitlines() if not ln.strip().startswith("```")]
+			logger.debug("Detected markdown code fences, removing...")
+			lines = text.splitlines()
+			# Remove first line if it's a fence (```json or ```)
+			if lines[0].strip().startswith("```"):
+				lines = lines[1:]
+				logger.debug(f"Removed first fence line: {text.splitlines()[0]}")
+			# Remove last line if it's a fence
+			if lines and lines[-1].strip() == "```":
+				lines = lines[:-1]
+				logger.debug("Removed last fence line")
 			text = "\n".join(lines).strip()
+			logger.debug(f"After fence removal (length: {len(text)} chars)")
+		
+		# Try to extract JSON if there's text before/after
+		# Look for content between { and }
+		if not text.startswith("{") and not text.startswith("["):
+			logger.debug("JSON doesn't start with { or [, searching for start...")
+			start_idx = text.find("{")
+			if start_idx == -1:
+				start_idx = text.find("[")
+			if start_idx != -1:
+				logger.debug(f"Found JSON start at index {start_idx}")
+				text = text[start_idx:]
+			else:
+				logger.warning("Could not find JSON start marker")
+		
+		# Find the end of the first complete JSON object/array
+		# This handles "extra data" errors when LLM adds content after JSON
+		if text.startswith("{"):
+			logger.debug("Finding matching closing brace for JSON object")
+			# Find matching closing brace
+			brace_count = 0
+			for i, char in enumerate(text):
+				if char == "{":
+					brace_count += 1
+				elif char == "}":
+					brace_count -= 1
+					if brace_count == 0:
+						if i < len(text) - 1:
+							logger.debug(f"Trimming extra content after JSON (from index {i+1})")
+							logger.debug(f"Extra content: {text[i+1:i+101]}...")
+						text = text[:i + 1]
+						break
+		elif text.startswith("["):
+			logger.debug("Finding matching closing bracket for JSON array")
+			# Find matching closing bracket
+			bracket_count = 0
+			for i, char in enumerate(text):
+				if char == "[":
+					bracket_count += 1
+				elif char == "]":
+					bracket_count -= 1
+					if bracket_count == 0:
+						if i < len(text) - 1:
+							logger.debug(f"Trimming extra content after JSON (from index {i+1})")
+							logger.debug(f"Extra content: {text[i+1:i+101]}...")
+						text = text[:i + 1]
+						break
+
+		logger.debug(f"Final text for JSON parsing (length: {len(text)} chars)")
+		logger.debug(f"Final text preview: {text[:500]}...")
 
 		try:
-			return json.loads(text)
-		except json.JSONDecodeError as exc:  # pragma: no cover - defensive
-			raise ValueError(f"LLM returned invalid JSON: {exc}") from exc
+			result = json.loads(text)
+			logger.info("Successfully parsed JSON")
+			logger.debug(f"Parsed JSON structure: {type(result)}, keys: {list(result.keys()) if isinstance(result, dict) else 'N/A'}")
+			return result
+		except json.JSONDecodeError as exc:
+			# Provide more helpful error message with context
+			error_context = text[max(0, exc.pos - 100):min(len(text), exc.pos + 100)]
+			logger.error(f"JSON parsing failed at position {exc.pos}: {exc.msg}")
+			logger.error(f"Error context: ...{error_context}...")
+			logger.error(f"Full response length: {len(raw)} chars")
+			logger.debug(f"Failed text (first 2000 chars): {text[:2000]}")
+			raise ValueError(
+				f"LLM returned invalid JSON at position {exc.pos}: {exc.msg}\n"
+				f"Context: ...{error_context}...\n"
+				f"Full response length: {len(raw)} chars"
+			) from exc
 
 
 __all__ = ["LLMService"]
