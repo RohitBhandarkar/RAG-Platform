@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+from copy import deepcopy
 from typing import Any, Dict, List
 from urllib import error, request
 
@@ -88,7 +89,8 @@ class LLMService:
 		logger.info(f"Received LLM response for {doc_id} (length: {len(raw)} chars)")
 		logger.debug(f"Raw LLM response: {raw}")
 		
-		result = self._parse_llm_json(raw)
+		parsed = self._parse_llm_json(raw)
+		result = self._normalize_canonical_output(parsed)
 		logger.info(f"Successfully parsed canonical JSON for {doc_id}")
 		logger.debug(f"Parsed result keys: {list(result.keys())}")
 		
@@ -154,7 +156,8 @@ SCHEMA (example structure; follow these keys and nesting exactly):
 
 RULES:
 - Output EXACTLY ONE JSON object with the structure shown in the schema above.
-- If multiple formulations exist, include them in the formulations array within the SINGLE JSON object.
+- If multiple formulations exist, include them in the formulations array within the SINGLE JSON object, following the schema exactly.
+- DO NOT return a top-level JSON array.
 - DO NOT output multiple separate JSON objects.
 - DO NOT add any text, explanations, or comments before or after the JSON.
 - For fields that are not reported or not applicable, use null, empty
@@ -437,8 +440,12 @@ Now return ONLY the filled JSON object, with no explanation or prose.
 			"models_payload": payload,
 		}
 
-	def _parse_llm_json(self, raw: str) -> Dict[str, Any]:
-		"""Parse JSON from LLM output, handling optional code fences and common formatting issues."""
+	def _parse_llm_json(self, raw: str) -> Any:
+		"""Parse JSON from LLM output.
+
+		This is a low-level parser that returns the decoded JSON value (dict/list/etc).
+		Canonical-shape normalization is handled separately.
+		"""
 		
 		logger.info(f"Starting JSON parsing (raw length: {len(raw)} chars)")
 		logger.debug(f"Raw response (first 1000 chars): {raw[:1000]}")
@@ -513,7 +520,9 @@ Now return ONLY the filled JSON object, with no explanation or prose.
 		try:
 			result = json.loads(text)
 			logger.info("Successfully parsed JSON")
-			logger.debug(f"Parsed JSON structure: {type(result)}, keys: {list(result.keys()) if isinstance(result, dict) else 'N/A'}")
+			logger.debug(
+				f"Parsed JSON structure: {type(result)}, keys: {list(result.keys()) if isinstance(result, dict) else 'N/A'}"
+			)
 			return result
 		except json.JSONDecodeError as exc:
 			# Provide more helpful error message with context
@@ -527,6 +536,123 @@ Now return ONLY the filled JSON object, with no explanation or prose.
 				f"Context: ...{error_context}...\n"
 				f"Full response length: {len(raw)} chars"
 			) from exc
+
+	def _normalize_canonical_output(self, result: Any) -> Dict[str, Any]:
+		"""Normalize LLM output into the canonical envelope dict.
+
+		The API and downstream code expect a single JSON object (dict). In practice,
+		LLMs sometimes return:
+		- A top-level list of canonical objects
+		- The older single-formulation schema (formulation_strategy/components/... at root)
+		
+		This method converts those variants into the current canonical schema
+		loaded from data/canonical.json, preserving all existing data points.
+		"""
+
+		# Already a canonical envelope (current schema)
+		if isinstance(result, dict) and "formulations" in result:
+			return result
+
+		# A list of objects: merge into one canonical envelope
+		if isinstance(result, list):
+			return self._merge_canonical_list(result)
+
+		# A single dict, but not the envelope: treat as legacy single-formulation output
+		if isinstance(result, dict):
+			return self._legacy_single_to_envelope(result)
+
+		raise ValueError(f"LLM returned unsupported JSON type: {type(result)}")
+
+	def _merge_canonical_list(self, items: List[Any]) -> Dict[str, Any]:
+		"""Merge a list of canonical-ish objects into one envelope dict."""
+		envelope = self._empty_envelope()
+		first_doc: Dict[str, Any] | None = None
+		first_api: Dict[str, Any] | None = None
+		first_meta: Dict[str, Any] | None = None
+
+		for item in items:
+			if not isinstance(item, dict):
+				continue
+			normalized = item
+			if "formulations" not in normalized:
+				normalized = self._legacy_single_to_envelope(normalized)
+
+			if first_doc is None and isinstance(normalized.get("document"), dict):
+				first_doc = normalized.get("document")
+			if first_api is None and isinstance(normalized.get("api"), dict):
+				first_api = normalized.get("api")
+			if first_meta is None and isinstance(normalized.get("metadata"), dict):
+				first_meta = normalized.get("metadata")
+
+			forms = normalized.get("formulations", [])
+			if isinstance(forms, list):
+				envelope["formulations"].extend(forms)
+
+		# Prefer the first document/api/metadata we saw.
+		if first_doc is not None:
+			envelope["document"] = first_doc
+		if first_api is not None:
+			envelope["api"] = first_api
+		if first_meta is not None:
+			envelope["metadata"] = first_meta
+
+		return envelope
+
+	def _legacy_single_to_envelope(self, obj: Dict[str, Any]) -> Dict[str, Any]:
+		"""Convert legacy single-formulation dict into the current envelope schema."""
+		envelope = self._empty_envelope()
+		if isinstance(obj.get("document"), dict):
+			envelope["document"] = obj.get("document")
+		if isinstance(obj.get("api"), dict):
+			envelope["api"] = obj.get("api")
+		if isinstance(obj.get("metadata"), dict):
+			envelope["metadata"] = obj.get("metadata")
+
+		# If the object is an older schema variant with screening/optimized, flatten them.
+		if "screening" in obj or "optimized" in obj:
+			for stage in ("screening", "optimized"):
+				stage_obj = obj.get(stage)
+				if not isinstance(stage_obj, dict):
+					continue
+				forms = stage_obj.get("formulations")
+				if isinstance(forms, list):
+					for f in forms:
+						if isinstance(f, dict):
+							f2 = dict(f)
+							f2.setdefault("stage", stage)
+							envelope["formulations"].append(f2)
+			return envelope
+
+		# If the object already has top-level formulations, keep them.
+		if isinstance(obj.get("formulations"), list):
+			envelope["formulations"].extend(obj.get("formulations"))
+			return envelope
+
+		# Otherwise, treat root fields as a single formulation.
+		formulation: Dict[str, Any] = {
+			"formulation_id": obj.get("formulation_id", ""),
+			"stage": obj.get("stage", ""),
+		}
+		for key in (
+			"formulation_strategy",
+			"components",
+			"process",
+			"particle_characteristics",
+			"stability",
+			"pharmacokinetics",
+		):
+			if key in obj:
+				formulation[key] = obj.get(key)
+
+		envelope["formulations"].append(formulation)
+		return envelope
+
+	def _empty_envelope(self) -> Dict[str, Any]:
+		"""Create an empty canonical envelope matching the loaded schema."""
+		base = deepcopy(self._canonical_schema)
+		# Ensure formulations array exists and is empty.
+		base["formulations"] = []
+		return base
 
 
 __all__ = ["LLMService"]

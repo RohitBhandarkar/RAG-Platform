@@ -7,33 +7,9 @@ from pathlib import Path
 
 
 def get_canonical_schema():
-    return {
-        "document": {
-            "title": "",
-            "authors": [],
-            "journal": "",
-            "year": None,
-            "doi": "",
-            "pmid": "",
-            "url": "",
-            "abstract_summary": "",
-            "document_type": "",
-            "ingestion_notes": ""
-        },
-        "api": {
-            "name": "",
-            "synonyms": [],
-            "molecular_weight": None,
-            "melting_point_c": None,
-            "glass_transition_temp_c": None,
-            "logp": None,
-            "logd": None,
-            "pka": None,
-            "bcs_class": "",
-            "aqueous_solubility": "",
-            "stability_sensitivities": [],
-            "dose_mg": None
-        },
+    formulation_template = {
+        "formulation_id": "",
+        "stage": "",
         "formulation_strategy": {
             "strategy_name": "Nanocrystal",
             "description": "",
@@ -77,7 +53,37 @@ def get_canonical_schema():
             "cmax": None,
             "auc": None,
             "tmax": None
+        }
+    }
+
+    return {
+        "document": {
+            "title": "",
+            "authors": [],
+            "journal": "",
+            "year": None,
+            "doi": "",
+            "pmid": "",
+            "url": "",
+            "abstract_summary": "",
+            "document_type": "",
+            "ingestion_notes": ""
         },
+        "api": {
+            "name": "",
+            "synonyms": [],
+            "molecular_weight": None,
+            "melting_point_c": None,
+            "glass_transition_temp_c": None,
+            "logp": None,
+            "logd": None,
+            "pka": None,
+            "bcs_class": "",
+            "aqueous_solubility": "",
+            "stability_sensitivities": [],
+            "dose_mg": None
+        },
+        "formulations": [formulation_template],
         "metadata": {
             "formulation_type": "nanocrystal",
             "data_source": "",
