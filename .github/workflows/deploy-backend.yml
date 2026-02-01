@@ -130,3 +130,135 @@ jobs:
               echo '=== Cleaning up old images (keeping last 5) ==='
               sudo docker images ${{ env.ARTIFACT_REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/rag-backend/${{ env.IMAGE_NAME }} --format '{{.ID}} {{.CreatedAt}}' | sort -rk 2 | awk 'NR>5{print \$1}' | xargs -r sudo docker rmi || true
             "
+
+
+n:
+  push:
+    branches:
+      - release/v1.0
+    paths:
+      - 'backend/**'
+      - 'scripts/**'
+      - '.github/workflows/deploy-backend.yml'
+  workflow_dispatch:
+
+env:
+  GCP_REGION: us-central1
+  ARTIFACT_REGISTRY: us-central1-docker.pkg.dev
+  IMAGE_NAME: rag-backend
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: read
+      id-token: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+      
+      - name: Configure Docker for Artifact Registry
+        run: |
+          gcloud auth configure-docker ${{ env.ARTIFACT_REGISTRY }}
+      
+      - name: Build Docker image
+        run: |
+          docker build \
+            -f backend/Dockerfile \
+            -t ${{ env.ARTIFACT_REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/rag-backend/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+            -t ${{ env.ARTIFACT_REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/rag-backend/${{ env.IMAGE_NAME }}:latest \
+            .
+      
+      - name: Push Docker image
+        run: |
+          docker push ${{ env.ARTIFACT_REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/rag-backend/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker push ${{ env.ARTIFACT_REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/rag-backend/${{ env.IMAGE_NAME }}:latest
+      
+      
+      - name: Deploy to GCP VM
+        run: |
+          gcloud compute ssh bioct-rag-release \
+            --zone=${{ secrets.GCP_VM_ZONE }} \
+            --tunnel-through-iap \
+            --command="
+              set -e
+              echo '=== Authenticating Docker with Artifact Registry ==='
+              gcloud auth configure-docker ${{ env.ARTIFACT_REGISTRY }} --quiet
+
+              echo '=== Making Docker auth available for sudo ==='
+              sudo mkdir -p /root/.docker
+              sudo cp -f ~/.docker/config.json /root/.docker/config.json
+
+              echo '=== Pulling backend image ==='
+              sudo docker pull ${{ env.ARTIFACT_REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/rag-backend/${{ env.IMAGE_NAME }}:${{ github.sha }}
+              
+              echo '=== Stopping old container ==='
+              sudo docker stop rag-backend || true
+              sudo docker rm rag-backend || true
+              
+              echo '=== Starting new container ==='
+              sudo docker run -d \
+                --name rag-backend \
+                --restart unless-stopped \
+                --gpus all \
+                --network host \
+                -e API_HOST=0.0.0.0 \
+                -e API_PORT=8080 \
+                -e ENVIRONMENT=${{ secrets.ENVIRONMENT }} \
+                -e LLM_BASE_URL=vertex \
+                -e LLM_MODEL=gemini-2.5-pro \
+                -e GOOGLE_CLOUD_PROJECT=${{ secrets.GCP_PROJECT_ID }} \
+                -e VERTEX_LOCATION=${{ env.GCP_REGION }} \
+                -e GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }} \
+                ${{ env.ARTIFACT_REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/rag-backend/${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+              echo '=== Running create_document_store.sh inside container ==='
+              sudo docker exec rag-backend /RAG-Platform/scripts/create_document_store.sh
+              
+              echo '=== Waiting for container to start ==='
+              sleep 5
+              
+              echo '=== Container status ==='
+              sudo docker ps -a | grep rag-backend
+
+              echo '=== Container logs (last 120 lines) ==='
+              sudo docker logs --tail 120 rag-backend || true
+            "
+      
+      - name: Verify deployment
+        run: |
+          gcloud compute ssh bioct-rag-release \
+            --zone=${{ secrets.GCP_VM_ZONE }} \
+            --tunnel-through-iap \
+            --command="
+              echo '=== Checking backend health endpoint ==='
+              curl -f http://localhost:8080/health || exit 1
+              echo ''
+              curl -f http://localhost:8080/health/storage || exit 1
+              echo ''
+              echo '=== Checking LLM health endpoint ==='
+              curl -f http://localhost:8080/health/llm || exit 1
+              echo ''
+              echo '=== Deployment successful ==='
+            "
+      
+      - name: Cleanup old images
+        run: |
+          gcloud compute ssh bioct-rag-release \
+            --zone=${{ secrets.GCP_VM_ZONE }} \
+            --tunnel-through-iap \
+            --command="
+              echo '=== Cleaning up old images (keeping last 5) ==='
+              sudo docker images ${{ env.ARTIFACT_REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/rag-backend/${{ env.IMAGE_NAME }} --format '{{.ID}} {{.CreatedAt}}' | sort -rk 2 | awk 'NR>5{print \$1}' | xargs -r sudo docker rmi || true
+            "
