@@ -62,11 +62,15 @@ class LLMService:
 		extra_metadata: Dict[str, Any],
 		source: str,
 		doc_id: str,
+		max_retries: int = 5,
 	) -> Dict[str, Any]:
 		"""Generate canonical JSON for a single paper.
 
 		This method is synchronous by design; callers may wrap it in an
 		async context if needed.
+		
+		Args:
+			max_retries: Maximum number of retry attempts for invalid JSON (default: 5)
 		"""
 		logger.info(f"Starting canonical generation for doc_id={doc_id}, source={source}")
 		logger.debug(f"Document has {len(text_chunks)} text chunks and {len(table_chunks)} table chunks")
@@ -83,16 +87,42 @@ class LLMService:
 		logger.info(f"Built prompt for {doc_id} (length: {len(prompt)} chars)")
 		logger.debug(f"Prompt preview (first 500 chars): {prompt[:500]}...")
 
-		raw = self._call_http_llm(prompt)
+		# Retry loop for invalid JSON responses
+		last_error = None
+		for attempt in range(1, max_retries + 1):
+			try:
+				logger.info(f"LLM attempt {attempt}/{max_retries} for doc_id={doc_id}")
+				
+				raw = self._call_http_llm(prompt)
+				
+				logger.info(f"Received LLM response for {doc_id} (length: {len(raw)} chars, attempt {attempt})")
+				logger.debug(f"Raw LLM response (attempt {attempt}): {raw}")
+				
+				result = self._parse_llm_json(raw)
+				logger.info(f"Successfully parsed canonical JSON for {doc_id} on attempt {attempt}")
+				logger.debug(f"Parsed result keys: {list(result.keys())}")
+				
+				return result
+				
+			except (ValueError, json.JSONDecodeError) as e:
+				last_error = e
+				logger.warning(
+					f"Invalid JSON on attempt {attempt}/{max_retries} for doc_id={doc_id}: {str(e)[:200]}"
+				)
+				
+				if attempt < max_retries:
+					logger.info(f"Retrying LLM call for doc_id={doc_id} (attempt {attempt + 1}/{max_retries})")
+				else:
+					logger.error(
+						f"Failed to get valid JSON after {max_retries} attempts for doc_id={doc_id}"
+					)
+					raise ValueError(
+						f"LLM failed to produce valid JSON after {max_retries} attempts. "
+						f"Last error: {str(last_error)}"
+					) from last_error
 		
-		logger.info(f"Received LLM response for {doc_id} (length: {len(raw)} chars)")
-		logger.debug(f"Raw LLM response: {raw}")
-		
-		result = self._parse_llm_json(raw)
-		logger.info(f"Successfully parsed canonical JSON for {doc_id}")
-		logger.debug(f"Parsed result keys: {list(result.keys())}")
-		
-		return result
+		# Should never reach here, but for type safety
+		raise ValueError(f"Unexpected error in retry loop for doc_id={doc_id}")
 
 	def _build_prompt(
 		self,
