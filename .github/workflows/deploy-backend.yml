@@ -3,7 +3,7 @@ name: Deploy Backend to GCP (Strat-1)
 on:
   push:
     branches:
-      - release/strat-1
+      - feature/**
     paths:
       - 'backend/**'
       - 'scripts/**'
