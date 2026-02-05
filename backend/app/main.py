@@ -22,6 +22,7 @@ from app.db import (
 from app.storage import ensure_layout, summarize_layout, list_files
 from app.api.routes import documents as documents_routes
 from app.services.llm_service import LLMService
+from app.services.embedding_service import EmbeddingService, EmbeddingIngestionService
 
 
 # Create Enum for table dropdown in Swagger
@@ -44,6 +45,7 @@ app = FastAPI(title="RAG Backend", version="0.1.0")
 health_router = APIRouter(prefix="/health", tags=["Health"])
 query_router = APIRouter(prefix="/query", tags=["Query"])
 tests_router = APIRouter(prefix="/tests", tags=["Tests"])
+embedding_router = APIRouter(prefix="/embeddings", tags=["Embeddings"])
 
 
 class SQLQuery(BaseModel):
@@ -52,9 +54,19 @@ class SQLQuery(BaseModel):
 
 class VectorSearchQuery(BaseModel):
 	table: str  # Must be one of EMBEDDING_TABLES
-	query_embedding: list[float]  # 384-dim vector
+	query_embedding: list[float]  # 768-dim vector
 	n_results: int = 5
 	metadata_filter: dict | None = None
+
+
+# Create Enum for embedding table selection
+EmbeddingTableName = Enum("EmbeddingTableName", {
+	"formulation_summary": "formulation_summary_embeddings",
+	"manufacturing_process": "manufacturing_process_embeddings",
+	"particle_analytics": "particle_analytics_embeddings",
+	"in_vitro": "in_vitro_embeddings",
+	"in_vivo": "in_vivo_embeddings",
+})
 
 
 @app.get("/")
@@ -391,9 +403,145 @@ def run_tests():
 	}
 
 
+# ============================================================================
+# Embedding Endpoints
+# ============================================================================
+
+@embedding_router.get("/health", summary="Check embedding service health")
+def embedding_health():
+	"""
+	Check the health and connectivity of the Vertex AI embedding service.
+	
+	Tests:
+	- Vertex AI API connectivity
+	- text-embedding-004 model availability
+	- Token generation capability
+	"""
+	try:
+		embedding_service = EmbeddingService()
+		health_info = embedding_service.check_health()
+		return {
+			"service": "embedding",
+			**health_info,
+		}
+	except Exception as e:
+		return {
+			"service": "embedding",
+			"status": "unhealthy",
+			"error": str(e),
+		}
+
+
+@embedding_router.post("/ingest", summary="Run full embedding ingestion")
+def embedding_ingest_all():
+	"""
+	Generate and store embeddings for ALL structured data.
+	
+	This triggers embedding generation for:
+	- formulation_summary_embeddings (from formulations + excipients + APIs)
+	- manufacturing_process_embeddings (from manufacturing_processes + parameters)
+	- particle_analytics_embeddings (from particle_characteristics + analytical_results)
+	- in_vitro_embeddings (from dissolution_profiles + timepoints)
+	- in_vivo_embeddings (from pk_studies + pk_parameters + BE results)
+	
+	⚠️ This is a long-running operation. Each record makes an API call to Vertex AI.
+	"""
+	try:
+		ingestion_service = EmbeddingIngestionService()
+		results = ingestion_service.ingest_all_embeddings()
+		
+		total_embedded = sum(
+			r.get("embedded", 0) for r in results.values() if isinstance(r, dict) and "embedded" in r
+		)
+		total_errors = sum(
+			r.get("errors", 0) for r in results.values() if isinstance(r, dict) and "errors" in r
+		)
+		
+		return {
+			"status": "completed",
+			"total_embedded": total_embedded,
+			"total_errors": total_errors,
+			"details": results,
+		}
+	except Exception as e:
+		raise HTTPException(status_code=500, detail=f"Embedding ingestion failed: {e}")
+
+
+@embedding_router.post("/ingest/{table}", summary="Run embedding ingestion for specific table")
+def embedding_ingest_table(table: EmbeddingTableName):
+	"""
+	Generate and store embeddings for a specific data category.
+	
+	Choose from:
+	- formulation_summary: Drug formulations with excipients and APIs
+	- manufacturing_process: Manufacturing processes with parameters
+	- particle_analytics: Particle characteristics and analytical results
+	- in_vitro: Dissolution profiles and timepoints
+	- in_vivo: PK studies with parameters and BE results
+	"""
+	try:
+		ingestion_service = EmbeddingIngestionService()
+		
+		# Map table enum to ingestion method
+		method_map = {
+			"formulation_summary_embeddings": ingestion_service.ingest_formulation_embeddings,
+			"manufacturing_process_embeddings": ingestion_service.ingest_manufacturing_embeddings,
+			"particle_analytics_embeddings": ingestion_service.ingest_particle_analytics_embeddings,
+			"in_vitro_embeddings": ingestion_service.ingest_in_vitro_embeddings,
+			"in_vivo_embeddings": ingestion_service.ingest_in_vivo_embeddings,
+		}
+		
+		table_name = table.value
+		if table_name not in method_map:
+			raise HTTPException(status_code=400, detail=f"Unknown embedding table: {table_name}")
+		
+		result = method_map[table_name]()
+		
+		return {
+			"status": "completed",
+			"table": table_name,
+			"processed": result.get("processed", 0),
+			"embedded": result.get("embedded", 0),
+			"errors": result.get("errors", 0),
+		}
+	except HTTPException:
+		raise
+	except Exception as e:
+		raise HTTPException(status_code=500, detail=f"Embedding ingestion failed: {e}")
+
+
+@embedding_router.post("/generate", summary="Generate embedding for text")
+def embedding_generate(text: str):
+	"""
+	Generate a 768-dimensional embedding vector for the given text.
+	
+	Uses Vertex AI text-embedding-004 model.
+	
+	This can be used for:
+	- Testing the embedding service
+	- Generating query embeddings for similarity search
+	- Debugging embedding outputs
+	"""
+	try:
+		embedding_service = EmbeddingService()
+		embedding = embedding_service.generate_embedding(text)
+		
+		return {
+			"text": text[:100] + "..." if len(text) > 100 else text,
+			"model": embedding_service.model,
+			"dimension": len(embedding),
+			"embedding": embedding,
+		}
+	except ValueError as e:
+		raise HTTPException(status_code=400, detail=str(e))
+	except Exception as e:
+		raise HTTPException(status_code=500, detail=f"Embedding generation failed: {e}")
+
+
 app.include_router(health_router)
 app.include_router(query_router)
 app.include_router(tests_router)
+app.include_router(embedding_router)
 app.include_router(documents_routes.router)
 
 

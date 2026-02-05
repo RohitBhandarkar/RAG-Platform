@@ -271,7 +271,7 @@ CREATE TABLE IF NOT EXISTS formulation_summary_embeddings (
     id SERIAL PRIMARY KEY,
     formulation_id INTEGER REFERENCES formulations(id) ON DELETE CASCADE,
     text_content TEXT NOT NULL,                -- Constructed text for embedding
-    embedding vector(384),                     -- sentence-transformers all-MiniLM-L6-v2
+    embedding vector(768),                     -- Vertex AI text-embedding-004
     metadata JSONB,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -282,7 +282,7 @@ CREATE TABLE IF NOT EXISTS manufacturing_process_embeddings (
     id SERIAL PRIMARY KEY,
     manufacturing_process_id INTEGER REFERENCES manufacturing_processes(id) ON DELETE CASCADE,
     text_content TEXT NOT NULL,
-    embedding vector(384),
+    embedding vector(768),                     -- Vertex AI text-embedding-004
     metadata JSONB,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -293,7 +293,7 @@ CREATE TABLE IF NOT EXISTS particle_analytics_embeddings (
     id SERIAL PRIMARY KEY,
     formulation_id INTEGER REFERENCES formulations(id) ON DELETE CASCADE,
     text_content TEXT NOT NULL,
-    embedding vector(384),
+    embedding vector(768),                     -- Vertex AI text-embedding-004
     metadata JSONB,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -304,7 +304,7 @@ CREATE TABLE IF NOT EXISTS in_vitro_embeddings (
     id SERIAL PRIMARY KEY,
     dissolution_profile_id INTEGER REFERENCES dissolution_profiles(id) ON DELETE CASCADE,
     text_content TEXT NOT NULL,
-    embedding vector(384),
+    embedding vector(768),                     -- Vertex AI text-embedding-004
     metadata JSONB,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -315,7 +315,7 @@ CREATE TABLE IF NOT EXISTS in_vivo_embeddings (
     id SERIAL PRIMARY KEY,
     pk_study_id INTEGER REFERENCES pk_studies(id) ON DELETE CASCADE,
     text_content TEXT NOT NULL,
-    embedding vector(384),
+    embedding vector(768),                     -- Vertex AI text-embedding-004
     metadata JSONB,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -326,7 +326,7 @@ CREATE TABLE IF NOT EXISTS document_chunk_embeddings (
     source_document_id INTEGER REFERENCES source_documents(id) ON DELETE CASCADE,
     chunk_index INTEGER,
     chunk_text TEXT NOT NULL,
-    embedding vector(384),
+    embedding vector(768),                     -- Vertex AI text-embedding-004
     metadata JSONB,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

@@ -26,9 +26,9 @@ class Settings(BaseSettings):
     POSTGRES_USER: str = Field("postgres")
     POSTGRES_PASSWORD: str = Field("postgres")
 
-    # Embedding settings (sentence-transformers)
-    EMBEDDING_MODEL: str = Field("all-MiniLM-L6-v2")
-    EMBEDDING_DIMENSION: int = Field(384)
+    # Embedding settings (Vertex AI text-embedding-004)
+    EMBEDDING_MODEL: str = Field("text-embedding-004")
+    EMBEDDING_DIMENSION: int = Field(768)
 
     class Config:
         env_file = ".env"
