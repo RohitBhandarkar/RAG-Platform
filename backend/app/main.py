@@ -1,5 +1,6 @@
 from typing import Literal
 import logging
+from enum import Enum
 
 from fastapi import APIRouter, FastAPI, HTTPException
 from pydantic import BaseModel
@@ -16,10 +17,15 @@ from app.db import (
     get_embedding_counts,
     vector_search,
     EMBEDDING_TABLES,
+    EXPECTED_TABLES,
 )
 from app.storage import ensure_layout, summarize_layout, list_files
 from app.api.routes import documents as documents_routes
 from app.services.llm_service import LLMService
+
+
+# Create Enum for table dropdown in Swagger
+TableName = Enum("TableName", {table: table for table in EXPECTED_TABLES})
 
 
 # Configure logging
@@ -220,12 +226,81 @@ def health_llm():
 	}
 
 
-@query_router.post("/postgres", summary="Run SQL query on PostgreSQL")
+@query_router.get("/get", summary="Get all records from a table")
+def query_get_table(table: TableName):
+	"""
+	Fetch all records from the selected table.
+	"""
+	table_name = table.value
+	try:
+		with engine.connect() as connection:
+			result = connection.execute(text(f'SELECT * FROM "{table_name}"'))
+			rows = [dict(row._mapping) for row in result]
+		return {"table": table_name, "count": len(rows), "rows": rows}
+	except Exception as e:
+		raise HTTPException(status_code=500, detail=f"Query failed: {e}")
+
+
+@query_router.delete("/purge", summary="Delete all records from a table")
+def query_purge_table(table: TableName):
+	"""
+	Delete all records from the selected table.
+	WARNING: This cannot be undone!
+	"""
+	table_name = table.value
+	try:
+		with engine.connect() as connection:
+			result = connection.execute(text(f'DELETE FROM "{table_name}"'))
+			connection.commit()
+			deleted_count = result.rowcount
+		return {"table": table_name, "deleted": deleted_count, "status": "purged"}
+	except Exception as e:
+		raise HTTPException(status_code=500, detail=f"Purge failed: {e}")
+
+
+@query_router.delete("/purgeall", summary="Delete all records from ALL tables")
+def query_purge_all():
+	"""
+	Delete all records from ALL tables.
+	WARNING: This will empty the entire database! Cannot be undone!
+	
+	Tables are purged in reverse order to respect foreign key constraints.
+	"""
+	results = {}
+	# Reverse order to handle FK dependencies (children first, parents last)
+	tables_in_order = list(reversed(EXPECTED_TABLES))
+	
+	try:
+		with engine.connect() as connection:
+			for table_name in tables_in_order:
+				try:
+					result = connection.execute(text(f'DELETE FROM "{table_name}"'))
+					results[table_name] = {"deleted": result.rowcount, "status": "purged"}
+				except Exception as e:
+					results[table_name] = {"deleted": 0, "status": "error", "error": str(e)}
+			connection.commit()
+		return {"status": "completed", "tables": results}
+	except Exception as e:
+		raise HTTPException(status_code=500, detail=f"Purge all failed: {e}")
+
+
+@query_router.post("/sql", summary="Run raw SQL query (advanced)")
 def run_postgres_query(query: SQLQuery):
-	with engine.connect() as connection:
-		result = connection.execute(text(query.sql))
-		rows = [dict(row._mapping) for row in result]
-	return {"rows": rows}
+	"""
+	Run a raw SQL query. Use with caution.
+	"""
+	try:
+		with engine.connect() as connection:
+			result = connection.execute(text(query.sql))
+			# Check if it's a SELECT query (returns rows)
+			if result.returns_rows:
+				rows = [dict(row._mapping) for row in result]
+				return {"rows": rows, "count": len(rows)}
+			else:
+				connection.commit()
+				return {"affected_rows": result.rowcount, "status": "executed"}
+	except Exception as e:
+		raise HTTPException(status_code=500, detail=f"SQL query failed: {e}")
 
 
 @query_router.post("/vector", summary="Run vector similarity search")
