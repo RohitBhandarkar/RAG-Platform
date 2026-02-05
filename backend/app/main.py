@@ -7,8 +7,16 @@ from sqlalchemy import text
 import pytest
 
 from app.config import settings
-from app.db import check_db_connection, engine
-from app.chroma_client import check_chroma_connection, query_chroma
+from app.db import (
+    check_db_connection,
+    engine,
+    validate_sql_tables,
+    check_pgvector_extension,
+    get_table_row_counts,
+    get_embedding_counts,
+    vector_search,
+    EMBEDDING_TABLES,
+)
 from app.storage import ensure_layout, summarize_layout, list_files
 from app.api.routes import documents as documents_routes
 from app.services.llm_service import LLMService
@@ -36,10 +44,11 @@ class SQLQuery(BaseModel):
 	sql: str
 
 
-class ChromaQuery(BaseModel):
-	collection: str
-	query_texts: list[str]
+class VectorSearchQuery(BaseModel):
+	table: str  # Must be one of EMBEDDING_TABLES
+	query_embedding: list[float]  # 384-dim vector
 	n_results: int = 5
+	metadata_filter: dict | None = None
 
 
 @app.get("/")
@@ -64,11 +73,132 @@ def health_postgres():
 	}
 
 
-@health_router.get("/vector", summary="Vector DB health check")
+@health_router.get("/vector", summary="pgvector health check")
 def health_vector():
-	ok = check_chroma_connection()
-	status = "healthy" if ok[0] else "unhealthy"
-	return {"service": "chroma", "status": status, "Exception": str(ok[1])}
+	"""Check pgvector extension and embedding tables."""
+	pgvector_status = check_pgvector_extension()
+	embedding_counts = get_embedding_counts()
+	
+	is_healthy = pgvector_status.get("installed", False)
+	
+	return {
+		"service": "pgvector",
+		"status": "healthy" if is_healthy else "unhealthy",
+		"pgvector": pgvector_status,
+		"embedding_tables": EMBEDDING_TABLES,
+		"embedding_counts": embedding_counts,
+	}
+
+
+@health_router.get("/database/full", summary="Full database health check with pgvector validation")
+def health_database_full():
+	"""
+	Comprehensive database health check that validates:
+	- PostgreSQL connection
+	- pgvector extension installation and functionality
+	- All 19 expected tables exist
+	- Row counts for each table
+	"""
+	# Check basic connection
+	conn_ok, conn_error = check_db_connection()
+	
+	if not conn_ok:
+		return {
+			"service": "postgres",
+			"status": "unhealthy",
+			"connection": {"connected": False, "error": str(conn_error)},
+			"pgvector": {"installed": False},
+			"tables": {"valid": False},
+		}
+	
+	# Check pgvector extension
+	pgvector_status = check_pgvector_extension()
+	
+	# Validate tables
+	tables_status = validate_sql_tables()
+	
+	# Get row counts
+	row_counts = get_table_row_counts()
+	
+	# Determine overall health
+	is_healthy = (
+		conn_ok
+		and pgvector_status.get("installed", False)
+		and tables_status.get("valid", False)
+	)
+	
+	return {
+		"service": "postgres",
+		"status": "healthy" if is_healthy else "degraded",
+		"connection": {"connected": True},
+		"pgvector": pgvector_status,
+		"tables": {
+			"valid": tables_status.get("valid", False),
+			"expected_count": tables_status.get("expected_count", 0),
+			"found_count": tables_status.get("found_count", 0),
+			"missing": tables_status.get("missing", []),
+			"extra": tables_status.get("extra", []),
+		},
+		"row_counts": row_counts,
+	}
+
+
+
+
+
+@health_router.get("/all", summary="Combined health check for all services")
+def health_all():
+	"""
+	Combined health check for all services:
+	- PostgreSQL + pgvector
+	- LLM backend
+	- Storage
+	"""
+	# PostgreSQL + pgvector
+	pg_conn_ok, pg_error = check_db_connection()
+	pgvector_status = check_pgvector_extension() if pg_conn_ok else {"installed": False}
+	tables_status = validate_sql_tables() if pg_conn_ok else {"valid": False}
+	embedding_counts = get_embedding_counts() if pg_conn_ok else {}
+	
+	# LLM
+	llm_service = LLMService()
+	llm_info = llm_service.check_health()
+	
+	# Storage
+	try:
+		ensure_layout()
+		storage_ok = True
+	except Exception:
+		storage_ok = False
+	
+	# Overall status
+	all_healthy = (
+		pg_conn_ok
+		and pgvector_status.get("installed", False)
+		and tables_status.get("valid", False)
+		and llm_info.get("status") == "healthy"
+		and storage_ok
+	)
+	
+	return {
+		"status": "healthy" if all_healthy else "degraded",
+		"services": {
+			"postgres": {
+				"connected": pg_conn_ok,
+				"pgvector_installed": pgvector_status.get("installed", False),
+				"tables_valid": tables_status.get("valid", False),
+				"missing_tables": tables_status.get("missing", []),
+				"embedding_counts": embedding_counts,
+			},
+			"llm": {
+				"status": llm_info.get("status", "unhealthy"),
+				"base_url": llm_info.get("base_url"),
+			},
+			"storage": {
+				"status": "healthy" if storage_ok else "unhealthy",
+			},
+		},
+	}
 
 
 @health_router.get("/llm", summary="LLM backend health check")
@@ -98,17 +228,31 @@ def run_postgres_query(query: SQLQuery):
 	return {"rows": rows}
 
 
-@query_router.post("/chroma", summary="Run query against ChromaDB")
-def run_chroma_query(body: ChromaQuery):
+@query_router.post("/vector", summary="Run vector similarity search")
+def run_vector_search(body: VectorSearchQuery):
+	"""
+	Perform vector similarity search on an embedding table.
+	
+	Tables available:
+	- formulation_summary_embeddings
+	- manufacturing_process_embeddings
+	- particle_analytics_embeddings
+	- in_vitro_embeddings
+	- in_vivo_embeddings
+	- document_chunk_embeddings
+	"""
 	try:
-		result = query_chroma(
-			collection=body.collection,
-			query_texts=body.query_texts,
+		results = vector_search(
+			table=body.table,
+			query_embedding=body.query_embedding,
 			n_results=body.n_results,
+			metadata_filter=body.metadata_filter,
 		)
-		return result
+		return {"table": body.table, "n_results": len(results), "results": results}
+	except ValueError as e:
+		raise HTTPException(status_code=400, detail=str(e))
 	except Exception as e:
-		raise HTTPException(status_code=500, detail=f"Chroma query failed: {e}")
+		raise HTTPException(status_code=500, detail=f"Vector search failed: {e}")
 
 
 @health_router.get("/storage", summary="Storage health check")

@@ -91,6 +91,11 @@ jobs:
                 -e GOOGLE_CLOUD_PROJECT=${{ secrets.GCP_PROJECT_ID }} \
                 -e VERTEX_LOCATION=${{ env.GCP_REGION }} \
                 -e GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }} \
+                -e POSTGRES_HOST=localhost \
+                -e POSTGRES_PORT=5432 \
+                -e POSTGRES_DB=formulation_rag \
+                -e POSTGRES_USER=postgres \
+                -e POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }} \
                 ${{ env.ARTIFACT_REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/rag-backend/${{ env.IMAGE_NAME }}:${{ github.sha }}
 
               echo '=== Running create_document_store.sh inside container ==='
@@ -119,6 +124,15 @@ jobs:
               echo ''
               echo '=== Checking LLM health endpoint ==='
               curl -f http://localhost:8080/health/llm || exit 1
+              echo ''
+              echo '=== Checking PostgreSQL health endpoint ==='
+              curl -s http://localhost:8080/health/postgres | jq .
+              echo ''
+              echo '=== Checking pgvector health endpoint ==='
+              curl -s http://localhost:8080/health/vector | jq .
+              echo ''
+              echo '=== Checking full database health ==='
+              curl -s http://localhost:8080/health/database/full | jq .
               echo ''
               echo '=== Deployment successful ==='
             "
