@@ -235,7 +235,7 @@ def vector_search(
         SELECT 
             id,
             text_content,
-            1 - (embedding <=> :embedding::vector) as similarity,
+            1 - (embedding <=> CAST(:embedding AS vector)) as similarity,
             metadata
         FROM {table}
         WHERE embedding IS NOT NULL
@@ -243,10 +243,10 @@ def vector_search(
     
     if metadata_filter:
         # Add JSONB containment filter
-        base_query += " AND metadata @> :metadata_filter::jsonb"
+        base_query += " AND metadata @> CAST(:metadata_filter AS jsonb)"
     
     base_query += f"""
-        ORDER BY embedding <=> :embedding::vector
+        ORDER BY embedding <=> CAST(:embedding AS vector)
         LIMIT :n_results
     """
     
@@ -300,7 +300,7 @@ def insert_embedding(
     
     query = f"""
         INSERT INTO {table} ({foreign_key_column}, text_content, embedding, metadata)
-        VALUES (:fk_value, :text_content, :embedding::vector, :metadata::jsonb)
+        VALUES (:fk_value, :text_content, CAST(:embedding AS vector), CAST(:metadata AS jsonb))
         RETURNING id
     """
     

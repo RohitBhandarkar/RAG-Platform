@@ -588,7 +588,7 @@ class EmbeddingIngestionService:
             insert_query = text(f"""
                 INSERT INTO {table} 
                 (text_content, embedding, metadata)
-                VALUES (:text, :emb::vector, :meta::jsonb)
+                VALUES (:text, CAST(:emb AS vector), CAST(:meta AS jsonb))
             """)
             
             conn.execute(insert_query, {

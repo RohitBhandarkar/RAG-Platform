@@ -122,7 +122,7 @@ class DatabaseIngestionService:
             conn.execute(
                 text("""
                     UPDATE source_documents 
-                    SET title = :title, file_path = :file_path, metadata = :metadata::jsonb
+                    SET title = :title, file_path = :file_path, metadata = CAST(:metadata AS jsonb)
                     WHERE id = :id
                 """),
                 {
@@ -138,7 +138,7 @@ class DatabaseIngestionService:
             result = conn.execute(
                 text("""
                     INSERT INTO source_documents (source_type, source_id, title, file_path, metadata)
-                    VALUES (:source_type, :source_id, :title, :file_path, :metadata::jsonb)
+                    VALUES (:source_type, :source_id, :title, :file_path, CAST(:metadata AS jsonb))
                     RETURNING id
                 """),
                 {
@@ -181,7 +181,7 @@ class DatabaseIngestionService:
             text("""
                 INSERT INTO formulations 
                 (source_document_id, formulation_name, drug_name, dosage_form, metadata)
-                VALUES (:source_doc_id, :name, :drug_name, :dosage_form, :metadata::jsonb)
+                VALUES (:source_doc_id, :name, :drug_name, :dosage_form, CAST(:metadata AS jsonb))
                 RETURNING id
             """),
             {
@@ -265,7 +265,7 @@ class DatabaseIngestionService:
         result = conn.execute(
             text("""
                 INSERT INTO apis (name, bcs_class, metadata)
-                VALUES (:name, :bcs_class, :metadata::jsonb)
+                VALUES (:name, :bcs_class, CAST(:metadata AS jsonb))
                 RETURNING id
             """),
             {
@@ -281,7 +281,7 @@ class DatabaseIngestionService:
         conn.execute(
             text("""
                 INSERT INTO formulation_apis (formulation_id, api_id, metadata)
-                VALUES (:form_id, :api_id, :metadata::jsonb)
+                VALUES (:form_id, :api_id, CAST(:metadata AS jsonb))
                 ON CONFLICT (formulation_id, api_id) DO NOTHING
             """),
             {
@@ -310,7 +310,7 @@ class DatabaseIngestionService:
         result = conn.execute(
             text("""
                 INSERT INTO excipients (name, functional_category, metadata)
-                VALUES (:name, :role, :metadata::jsonb)
+                VALUES (:name, :role, CAST(:metadata AS jsonb))
                 RETURNING id
             """),
             {
@@ -327,7 +327,7 @@ class DatabaseIngestionService:
             text("""
                 INSERT INTO formulation_excipients 
                 (formulation_id, excipient_id, amount, unit, role, metadata)
-                VALUES (:form_id, :exc_id, :amount, :unit, :role, :metadata::jsonb)
+                VALUES (:form_id, :exc_id, :amount, :unit, :role, CAST(:metadata AS jsonb))
                 ON CONFLICT (formulation_id, excipient_id) DO NOTHING
             """),
             {
@@ -349,7 +349,7 @@ class DatabaseIngestionService:
             text("""
                 INSERT INTO manufacturing_processes 
                 (formulation_id, process_type, process_description, equipment_used, metadata)
-                VALUES (:form_id, :process_type, :description, :equipment, :metadata::jsonb)
+                VALUES (:form_id, :process_type, :description, :equipment, CAST(:metadata AS jsonb))
                 RETURNING id
             """),
             {
@@ -399,7 +399,7 @@ class DatabaseIngestionService:
             text("""
                 INSERT INTO particle_characteristics 
                 (formulation_id, measurement_type, d50, span, unit, metadata)
-                VALUES (:form_id, :method, :d50, :pdi, :unit, :metadata::jsonb)
+                VALUES (:form_id, :method, :d50, :pdi, :unit, CAST(:metadata AS jsonb))
             """),
             {
                 "form_id": formulation_id,
@@ -420,7 +420,7 @@ class DatabaseIngestionService:
             text("""
                 INSERT INTO dissolution_profiles 
                 (formulation_id, dissolution_method, medium, rpm, metadata)
-                VALUES (:form_id, :method, :medium, :rpm, :metadata::jsonb)
+                VALUES (:form_id, :method, :medium, :rpm, CAST(:metadata AS jsonb))
                 RETURNING id
             """),
             {
@@ -466,7 +466,7 @@ class DatabaseIngestionService:
             text("""
                 INSERT INTO pk_studies 
                 (formulation_id, study_type, species, study_design, metadata)
-                VALUES (:form_id, :study_type, :species, :design, :metadata::jsonb)
+                VALUES (:form_id, :study_type, :species, :design, CAST(:metadata AS jsonb))
                 RETURNING id
             """),
             {
@@ -513,7 +513,7 @@ class DatabaseIngestionService:
                     text("""
                         INSERT INTO bioequivalence_results 
                         (pk_study_id, parameter_name, test_ref_ratio, metadata)
-                        VALUES (:pk_id, :name, :ratio, :metadata::jsonb)
+                        VALUES (:pk_id, :name, :ratio, CAST(:metadata AS jsonb))
                     """),
                     {
                         "pk_id": pk_study_id,
