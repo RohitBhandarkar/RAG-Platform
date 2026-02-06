@@ -5,7 +5,6 @@ from enum import Enum
 from fastapi import APIRouter, FastAPI, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import text
-import pytest
 
 from app.config import settings
 from app.db import (
@@ -44,7 +43,6 @@ app = FastAPI(title="RAG Backend", version="0.1.0")
 
 health_router = APIRouter(prefix="/health", tags=["Health"])
 query_router = APIRouter(prefix="/query", tags=["Query"])
-tests_router = APIRouter(prefix="/tests", tags=["Tests"])
 embedding_router = APIRouter(prefix="/embeddings", tags=["Embeddings"])
 
 
@@ -78,91 +76,6 @@ def root():
 @app.get("/health")
 def health():
 	return {"status": "ok"}
-
-
-@health_router.get("/postgres", summary="PostgreSQL health check")
-def health_postgres():
-	ok = check_db_connection()
-	status = "healthy" if ok[0] else "unhealthy"
-	return {
-		"service": "postgres",
-		"status": status,
-		"database": "connected" if status else "error",
-		"Exception": str(ok[1]),
-	}
-
-
-@health_router.get("/vector", summary="pgvector health check")
-def health_vector():
-	"""Check pgvector extension and embedding tables."""
-	pgvector_status = check_pgvector_extension()
-	embedding_counts = get_embedding_counts()
-	
-	is_healthy = pgvector_status.get("installed", False)
-	
-	return {
-		"service": "pgvector",
-		"status": "healthy" if is_healthy else "unhealthy",
-		"pgvector": pgvector_status,
-		"embedding_tables": EMBEDDING_TABLES,
-		"embedding_counts": embedding_counts,
-	}
-
-
-@health_router.get("/database/full", summary="Full database health check with pgvector validation")
-def health_database_full():
-	"""
-	Comprehensive database health check that validates:
-	- PostgreSQL connection
-	- pgvector extension installation and functionality
-	- All 19 expected tables exist
-	- Row counts for each table
-	"""
-	# Check basic connection
-	conn_ok, conn_error = check_db_connection()
-	
-	if not conn_ok:
-		return {
-			"service": "postgres",
-			"status": "unhealthy",
-			"connection": {"connected": False, "error": str(conn_error)},
-			"pgvector": {"installed": False},
-			"tables": {"valid": False},
-		}
-	
-	# Check pgvector extension
-	pgvector_status = check_pgvector_extension()
-	
-	# Validate tables
-	tables_status = validate_sql_tables()
-	
-	# Get row counts
-	row_counts = get_table_row_counts()
-	
-	# Determine overall health
-	is_healthy = (
-		conn_ok
-		and pgvector_status.get("installed", False)
-		and tables_status.get("valid", False)
-	)
-	
-	return {
-		"service": "postgres",
-		"status": "healthy" if is_healthy else "degraded",
-		"connection": {"connected": True},
-		"pgvector": pgvector_status,
-		"tables": {
-			"valid": tables_status.get("valid", False),
-			"expected_count": tables_status.get("expected_count", 0),
-			"found_count": tables_status.get("found_count", 0),
-			"missing": tables_status.get("missing", []),
-			"extra": tables_status.get("extra", []),
-		},
-		"row_counts": row_counts,
-	}
-
-
-
 
 
 @health_router.get("/all", summary="Combined health check for all services")
@@ -343,27 +256,6 @@ def run_vector_search(body: VectorSearchQuery):
 		raise HTTPException(status_code=500, detail=f"Vector search failed: {e}")
 
 
-@health_router.get("/storage", summary="Storage health check")
-def health_storage():
-	try:
-		layout = ensure_layout()
-		# Healthy only if all expected directories already exist
-		all_exist = all(
-			section.get("exists")
-			if isinstance(section, dict) and "exists" in section
-			else all(
-				entry.get("exists")
-				for entry in section.values()
-				if isinstance(entry, dict)
-			)
-			for section in [layout.get("raw", {}), layout.get("processed", {}), layout.get("embeddings", {})]
-		)
-		status = "healthy" if all_exist else "unhealthy"
-		return {"service": "storage", "status": status, "layout": layout}
-	except Exception as e:
-		raise HTTPException(status_code=500, detail=f"Storage health check failed: {e}")
-
-
 @query_router.get("/summary", summary="Summarize document store layout")
 def storage_summary():
 	try:
@@ -385,31 +277,8 @@ def storage_list(
 		raise HTTPException(status_code=500, detail=f"Listing files failed: {e}")
 
 
-@tests_router.post("/run", summary="Run backend test suite")
-def run_tests():
-	class TestReport:
-		def __init__(self):
-			self.failed = []
-		
-		def pytest_runtest_logreport(self, report):
-			if report.when == "call" and report.failed:
-				self.failed.append(report.nodeid)
-	
-	reporter = TestReport()
-	exit_code = pytest.main(["-q"], plugins=[reporter])
-	return {
-		"exit_code": exit_code,
-		"success": exit_code == 0,
-		"failed_tests": reporter.failed if reporter.failed else None
-	}
-
-
-# ============================================================================
-# Embedding Endpoints
-# ============================================================================
-
-@embedding_router.get("/health", summary="Check embedding service health")
-def embedding_health():
+@health_router.get("/embeddings", summary="Check embedding service health")
+def health_embeddings():
 	"""
 	Check the health and connectivity of the Vertex AI embedding service.
 	
@@ -541,7 +410,6 @@ def embedding_generate(body: TextEmbeddingRequest):
 
 app.include_router(health_router)
 app.include_router(query_router)
-app.include_router(tests_router)
 app.include_router(embedding_router)
 app.include_router(documents_routes.router)
 
