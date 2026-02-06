@@ -491,6 +491,26 @@ def embedding_preview(body: CanonicalEmbeddingRequest):
 		raise HTTPException(status_code=500, detail=f"Preview failed: {e}")
 
 
+@embedding_router.post("/generate-from-canonical", summary="Generate embeddings from canonical JSON (no DB storage)")
+def embedding_generate_from_canonical(body: CanonicalEmbeddingRequest):
+	"""
+	Generate embeddings from a canonical JSON and return them directly.
+	
+	This calls Vertex AI to generate real embeddings but does NOT store them in the database.
+	Use this to inspect embeddings before committing to storage.
+	
+	Returns the text and 768-dim embedding vector for each category per formulation.
+	
+	⚠️ Each embedding makes an API call to Vertex AI text-embedding-004.
+	"""
+	try:
+		ingestion_service = EmbeddingIngestionService()
+		result = ingestion_service.generate_embeddings_from_canonical(body.canonical_json)
+		return result
+	except Exception as e:
+		raise HTTPException(status_code=500, detail=f"Embedding generation failed: {e}")
+
+
 @embedding_router.post("/generate", summary="Generate embedding for text")
 def embedding_generate(body: TextEmbeddingRequest):
 	"""

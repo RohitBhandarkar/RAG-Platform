@@ -479,6 +479,76 @@ class EmbeddingIngestionService:
             })
         
         return {"formulation_count": len(formulations), "previews": previews}
+    
+    def generate_embeddings_from_canonical(self, canonical: dict) -> dict:
+        """
+        Generate embeddings for canonical JSON and return them WITHOUT storing in DB.
+        
+        Args:
+            canonical: The canonical JSON dict
+            
+        Returns:
+            dict: Embeddings for each formulation and category
+        """
+        results = []
+        
+        formulations = canonical.get("formulations", [])
+        document = canonical.get("document", {})
+        doc_title = document.get("title", "Unknown document")
+        
+        for idx, formulation in enumerate(formulations):
+            form_id = formulation.get("formulation_id", f"form_{idx}")
+            form_result = {
+                "formulation_id": form_id,
+                "embeddings": {}
+            }
+            
+            # Build texts for each category
+            texts = {
+                "formulation_summary": self._build_formulation_summary_text(canonical, formulation),
+                "manufacturing_process": self._build_manufacturing_text(formulation),
+                "particle_analytics": self._build_particle_analytics_text(formulation),
+                "in_vitro": self._build_stability_text(formulation),
+                "in_vivo": self._build_pk_text(formulation),
+            }
+            
+            # Generate embeddings for each category
+            for category, text_content in texts.items():
+                # Skip default/empty texts
+                if text_content in [
+                    "Formulation data",
+                    "Manufacturing process data", 
+                    "Particle characteristics data",
+                    "Stability and in vitro data",
+                    "Pharmacokinetic data",
+                ]:
+                    form_result["embeddings"][category] = {
+                        "text": text_content,
+                        "embedding": None,
+                        "note": "No data available for this category"
+                    }
+                else:
+                    try:
+                        embedding = self.embedding_service.generate_embedding(text_content)
+                        form_result["embeddings"][category] = {
+                            "text": text_content,
+                            "embedding": embedding,
+                            "dimension": len(embedding),
+                        }
+                    except Exception as e:
+                        form_result["embeddings"][category] = {
+                            "text": text_content,
+                            "embedding": None,
+                            "error": str(e),
+                        }
+            
+            results.append(form_result)
+        
+        return {
+            "document_title": doc_title,
+            "formulation_count": len(formulations),
+            "results": results,
+        }
 
 
 __all__ = ["EmbeddingService", "EmbeddingIngestionService"]
