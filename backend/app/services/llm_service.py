@@ -62,15 +62,11 @@ class LLMService:
 		extra_metadata: Dict[str, Any],
 		source: str,
 		doc_id: str,
-		max_retries: int = 5,
 	) -> Dict[str, Any]:
 		"""Generate canonical JSON for a single paper.
 
 		This method is synchronous by design; callers may wrap it in an
 		async context if needed.
-		
-		Args:
-			max_retries: Maximum number of retry attempts for invalid JSON (default: 5)
 		"""
 		logger.info(f"Starting canonical generation for doc_id={doc_id}, source={source}")
 		logger.debug(f"Document has {len(text_chunks)} text chunks and {len(table_chunks)} table chunks")
@@ -87,42 +83,16 @@ class LLMService:
 		logger.info(f"Built prompt for {doc_id} (length: {len(prompt)} chars)")
 		logger.debug(f"Prompt preview (first 500 chars): {prompt[:500]}...")
 
-		# Retry loop for invalid JSON responses
-		last_error = None
-		for attempt in range(1, max_retries + 1):
-			try:
-				logger.info(f"LLM attempt {attempt}/{max_retries} for doc_id={doc_id}")
-				
-				raw = self._call_http_llm(prompt)
-				
-				logger.info(f"Received LLM response for {doc_id} (length: {len(raw)} chars, attempt {attempt})")
-				logger.debug(f"Raw LLM response (attempt {attempt}): {raw}")
-				
-				result = self._parse_llm_json(raw)
-				logger.info(f"Successfully parsed canonical JSON for {doc_id} on attempt {attempt}")
-				logger.debug(f"Parsed result keys: {list(result.keys())}")
-				
-				return result
-				
-			except (ValueError, json.JSONDecodeError) as e:
-				last_error = e
-				logger.warning(
-					f"Invalid JSON on attempt {attempt}/{max_retries} for doc_id={doc_id}: {str(e)[:200]}"
-				)
-				
-				if attempt < max_retries:
-					logger.info(f"Retrying LLM call for doc_id={doc_id} (attempt {attempt + 1}/{max_retries})")
-				else:
-					logger.error(
-						f"Failed to get valid JSON after {max_retries} attempts for doc_id={doc_id}"
-					)
-					raise ValueError(
-						f"LLM failed to produce valid JSON after {max_retries} attempts. "
-						f"Last error: {str(last_error)}"
-					) from last_error
+		raw = self._call_http_llm(prompt)
 		
-		# Should never reach here, but for type safety
-		raise ValueError(f"Unexpected error in retry loop for doc_id={doc_id}")
+		logger.info(f"Received LLM response for {doc_id} (length: {len(raw)} chars)")
+		logger.debug(f"Raw LLM response: {raw}")
+		
+		result = self._parse_llm_json(raw)
+		logger.info(f"Successfully parsed canonical JSON for {doc_id}")
+		logger.debug(f"Parsed result keys: {list(result.keys())}")
+		
+		return result
 
 	def _build_prompt(
 		self,
@@ -182,8 +152,16 @@ related formulations discussed in the paper.
 SCHEMA (example structure; follow these keys and nesting exactly):
 {self._canonical_schema_str}
 
-RULES:
-- Output EXACTLY ONE JSON object with the structure shown in the schema above.
+OUTPUT FORMAT REQUIREMENTS:
+1. Return EXACTLY ONE valid, complete JSON object.
+2. The JSON MUST be syntactically valid and fully parseable.
+3. All brackets {{ }} and [ ] MUST be properly opened and closed.
+4. All strings MUST be properly quoted and terminated.
+5. NO trailing commas after the last item in arrays or objects.
+6. DO NOT truncate - you MUST complete the entire JSON structure.
+7. Begin your response with {{ and end with }}.
+
+CONTENT RULES:
 - If multiple formulations exist, include them in the formulations array within the SINGLE JSON object.
 - DO NOT output multiple separate JSON objects.
 - DO NOT add any text, explanations, or comments before or after the JSON.
@@ -199,7 +177,11 @@ RULES:
   qualitative trends. You MUST NOT assume or guess values from images
   that are not described in text.
 
-CRITICAL: Return ONLY the JSON object. No additional text or objects.
+BREVITY GUIDELINES (to ensure complete output):
+- Keep string values concise - summarize key points rather than quoting verbatim.
+- Limit free-text fields (notes, observations, descriptions) to 1-2 sentences maximum.
+- Focus on extracting key numeric values and structured data.
+- Omit redundant or repetitive information across formulations.
 
 DOCUMENT CONTEXT:
 - Source: {source}
@@ -220,7 +202,7 @@ RELEVANT SECTIONS:
 TABLES (in markdown form):
 {tables_md}
 
-Now return ONLY the filled JSON object, with no explanation or prose.
+REMINDER: Output ONLY the complete, valid JSON object. Ensure ALL brackets are properly closed.
 """
 
 		return instructions
@@ -315,12 +297,12 @@ Now return ONLY the filled JSON object, with no explanation or prose.
 			],
 			"generationConfig": {
 				"temperature": 0.0,
-				"maxOutputTokens": 16384,
+				"maxOutputTokens": 32768,
 				"responseMimeType": "application/json",
 			},
 		}
 		
-		logger.debug(f"Request payload config: temperature=0.0, maxOutputTokens=16384, responseMimeType=application/json")
+		logger.debug(f"Request payload config: temperature=0.0, maxOutputTokens=32768, responseMimeType=application/json")
 		logger.debug(f"Prompt length: {len(prompt)} chars")
 
 		logger.info("Sending request to Vertex AI")
