@@ -2,15 +2,20 @@
 
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 import os
+import logging
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, UploadFile, Query
 
 from app.data.ingestion.document_processor import DocumentProcessor
 from app.data.parsers.pdf_parser import PDFParser
 from app.services.llm_service import LLMService
+from app.services.database_ingestion_service import DatabaseIngestionService
+from app.services.embedding_service import EmbeddingIngestionService
 
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/documents", tags=["Documents"])
 
@@ -228,6 +233,102 @@ async def preview_chunks(
 		raise
 	except Exception as exc:  # pragma: no cover - safety net
 		raise HTTPException(status_code=500, detail=f"Failed to build chunks: {exc}") from exc
+	finally:
+		if tmp_path is not None and tmp_path.exists():
+			try:
+				os.remove(tmp_path)
+			except OSError:
+				pass
+
+
+@router.post(
+	"/ingest",
+	summary="Ingest PDF into database with embeddings",
+	response_description="Ingestion statistics including created records and embeddings",
+)
+async def ingest_pdf_to_database(
+	file: UploadFile = File(..., description="PDF research paper to ingest"),
+	source_type: str = Query("user_upload", description="Source type (pubmed, patent, fda, user_upload)"),
+	generate_embeddings: bool = Query(True, description="Whether to generate and store embeddings"),
+) -> Dict[str, Any]:
+	"""Accept a PDF, extract canonical JSON, and populate the database.
+
+	This endpoint performs the full ingestion pipeline:
+	1. Parse the PDF using PDFParser
+	2. Generate canonical JSON using LLM (Gemini)
+	3. Populate PostgreSQL structured tables (formulations, excipients, APIs, etc.)
+	4. Optionally generate and store vector embeddings for semantic search
+
+	Returns:
+		- canonical: The extracted canonical JSON
+		- database_stats: Statistics for structured table insertions
+		- embedding_stats: Statistics for embedding generation (if enabled)
+	"""
+
+	if not file.filename or not file.filename.lower().endswith(".pdf"):
+		raise HTTPException(status_code=400, detail="Only PDF files are supported")
+
+	content = await file.read()
+	if not content:
+		raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+	tmp_path: Path | None = None
+	try:
+		# Save uploaded file temporarily
+		with NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+			tmp.write(content)
+			tmp_path = Path(tmp.name)
+
+		logger.info(f"Processing PDF: {file.filename}")
+
+		# Step 1: Generate canonical JSON via DocumentProcessor
+		processor = DocumentProcessor()
+		canonical = await processor.process_document(
+			file_path=tmp_path,
+			source="upload",
+			metadata={"original_filename": file.filename},
+		)
+
+		logger.info(f"Canonical JSON generated with {len(canonical.get('formulations', []))} formulations")
+
+		# Step 2: Populate structured PostgreSQL tables
+		db_service = DatabaseIngestionService()
+		db_stats = db_service.ingest_canonical(
+			canonical=canonical,
+			source_type=source_type,
+			source_id=file.filename,
+			file_path=str(tmp_path),
+		)
+
+		logger.info(f"Database ingestion complete: {db_stats}")
+
+		# Step 3: Generate and store embeddings (if enabled)
+		embedding_stats = None
+		if generate_embeddings:
+			try:
+				embedding_service = EmbeddingIngestionService()
+				embedding_stats = embedding_service.ingest_from_canonical(
+					canonical=canonical,
+					source_document_id=db_stats.get("source_document_id"),
+				)
+				logger.info(f"Embedding ingestion complete: {embedding_stats}")
+			except Exception as e:
+				logger.error(f"Embedding generation failed: {e}")
+				embedding_stats = {"error": str(e)}
+
+		return {
+			"status": "success",
+			"filename": file.filename,
+			"canonical": canonical,
+			"database_stats": db_stats,
+			"embedding_stats": embedding_stats,
+		}
+
+	except HTTPException:
+		raise
+	except Exception as exc:
+		logger.error(f"Failed to ingest PDF: {exc}")
+		raise HTTPException(status_code=500, detail=f"Failed to ingest PDF: {exc}") from exc
 	finally:
 		if tmp_path is not None and tmp_path.exists():
 			try:
