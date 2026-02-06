@@ -26,9 +26,12 @@ CREATE TABLE IF NOT EXISTS source_documents (
 CREATE TABLE IF NOT EXISTS formulations (
     id SERIAL PRIMARY KEY,
     source_document_id INTEGER REFERENCES source_documents(id) ON DELETE CASCADE,
+    api_id INTEGER,                            -- Direct FK to apis for fast queries (set after api created)
     formulation_name VARCHAR(255),
     drug_name VARCHAR(255),
     dosage_form VARCHAR(100),                  -- 'tablet', 'capsule', 'suspension', etc.
+    formulation_type VARCHAR(100),             -- 'nanosuspension', 'spray-dried', 'wet granulation', etc.
+    bcs_class VARCHAR(10),                     -- Denormalized from apis for fast filtering
     route_of_administration VARCHAR(100),
     therapeutic_area VARCHAR(255),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -320,16 +323,7 @@ CREATE TABLE IF NOT EXISTS in_vivo_embeddings (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- 24. document_chunk_embeddings: Raw document chunk embeddings for general search
-CREATE TABLE IF NOT EXISTS document_chunk_embeddings (
-    id SERIAL PRIMARY KEY,
-    source_document_id INTEGER REFERENCES source_documents(id) ON DELETE CASCADE,
-    chunk_index INTEGER,
-    chunk_text TEXT NOT NULL,
-    embedding vector(768),                     -- Vertex AI text-embedding-004
-    metadata JSONB,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
+-- 24. [REMOVED] document_chunk_embeddings - using structured extraction instead
 
 -- Create indexes for vector similarity search (HNSW for better performance)
 CREATE INDEX IF NOT EXISTS idx_formulation_summary_emb_vector 
@@ -347,9 +341,6 @@ ON in_vitro_embeddings USING hnsw (embedding vector_cosine_ops);
 CREATE INDEX IF NOT EXISTS idx_in_vivo_emb_vector 
 ON in_vivo_embeddings USING hnsw (embedding vector_cosine_ops);
 
-CREATE INDEX IF NOT EXISTS idx_document_chunk_emb_vector 
-ON document_chunk_embeddings USING hnsw (embedding vector_cosine_ops);
-
 -- ============================================================================
 -- INDEXES FOR PERFORMANCE
 -- ============================================================================
@@ -362,6 +353,9 @@ CREATE INDEX IF NOT EXISTS idx_source_documents_source_id ON source_documents(so
 CREATE INDEX IF NOT EXISTS idx_formulations_drug_name ON formulations(drug_name);
 CREATE INDEX IF NOT EXISTS idx_formulations_dosage_form ON formulations(dosage_form);
 CREATE INDEX IF NOT EXISTS idx_formulations_source_doc ON formulations(source_document_id);
+CREATE INDEX IF NOT EXISTS idx_formulations_api ON formulations(api_id);
+CREATE INDEX IF NOT EXISTS idx_formulations_bcs ON formulations(bcs_class);
+CREATE INDEX IF NOT EXISTS idx_formulations_type ON formulations(formulation_type);
 
 -- APIs
 CREATE INDEX IF NOT EXISTS idx_apis_bcs_class ON apis(bcs_class);
@@ -410,7 +404,6 @@ COMMENT ON TABLE manufacturing_process_embeddings IS 'Vector embeddings for manu
 COMMENT ON TABLE particle_analytics_embeddings IS 'Vector embeddings for particle/analytics data (replaces ChromaDB particle_and_analytics)';
 COMMENT ON TABLE in_vitro_embeddings IS 'Vector embeddings for dissolution/in vitro data (replaces ChromaDB in_vitro_performance)';
 COMMENT ON TABLE in_vivo_embeddings IS 'Vector embeddings for PK/in vivo data (replaces ChromaDB in_vivo_performance)';
-COMMENT ON TABLE document_chunk_embeddings IS 'Vector embeddings for raw document chunks';
 
 -- ============================================================================
 -- GRANT PERMISSIONS (for application user)

@@ -171,38 +171,45 @@ class DatabaseIngestionService:
         # Extract formulation details
         drug = formulation.get("drug", {})
         drug_name = drug.get("name", f"Unknown_{idx}")
+        drug_metadata = drug.get("metadata", {})
+        bcs_class = drug_metadata.get("bcs_class")
         
         formulation_name = formulation.get("name", formulation.get("formulation_id", f"Formulation_{idx}"))
         dosage_form = formulation.get("dosage_form", "")
         formulation_type = formulation.get("formulation_type", "")
         
-        # Insert formulation
+        # First create the API to get api_id
+        api_id = None
+        if drug.get("name"):
+            api_id = self._get_or_create_api(conn, drug)
+        
+        # Insert formulation with api_id, bcs_class, formulation_type
         form_result = conn.execute(
             text("""
                 INSERT INTO formulations 
-                (source_document_id, formulation_name, drug_name, dosage_form, metadata)
-                VALUES (:source_doc_id, :name, :drug_name, :dosage_form, CAST(:metadata AS jsonb))
+                (source_document_id, api_id, formulation_name, drug_name, dosage_form, formulation_type, bcs_class, metadata)
+                VALUES (:source_doc_id, :api_id, :name, :drug_name, :dosage_form, :formulation_type, :bcs_class, CAST(:metadata AS jsonb))
                 RETURNING id
             """),
             {
                 "source_doc_id": source_doc_id,
+                "api_id": api_id,
                 "name": formulation_name,
                 "drug_name": drug_name,
                 "dosage_form": dosage_form,
+                "formulation_type": formulation_type,
+                "bcs_class": bcs_class,
                 "metadata": json.dumps({
-                    "formulation_type": formulation_type,
                     "original_data": formulation,
                 }),
             }
         )
         formulation_id = form_result.fetchone()[0]
         
-        # Process API
-        if drug.get("name"):
-            api_id = self._get_or_create_api(conn, drug)
-            if api_id:
-                self._link_formulation_api(conn, formulation_id, api_id, drug)
-                result["apis"] = 1
+        # Link formulation to API (junction table)
+        if api_id:
+            self._link_formulation_api(conn, formulation_id, api_id, drug)
+            result["apis"] = 1
         
         # Process composition (excipients)
         composition = formulation.get("composition", {})

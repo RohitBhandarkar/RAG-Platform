@@ -56,7 +56,6 @@ EXPECTED_TABLES = [
     "particle_analytics_embeddings",
     "in_vitro_embeddings",
     "in_vivo_embeddings",
-    "document_chunk_embeddings",
 ]
 
 # Embedding table names for vector operations

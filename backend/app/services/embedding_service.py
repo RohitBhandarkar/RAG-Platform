@@ -475,6 +475,40 @@ class EmbeddingIngestionService:
         for idx, formulation in enumerate(formulations):
             form_id = formulation.get("formulation_id", f"form_{idx}")
             
+            # Build enriched metadata for RAG filtering
+            drug = formulation.get("drug", {})
+            drug_metadata = drug.get("metadata", {})
+            physical_props = formulation.get("physical_properties", {})
+            particle = physical_props.get("particle", {})
+            particle_size = particle.get("particle_size", {})
+            
+            # Extract key dissolution metrics for filtering
+            dissolution_metrics = {}
+            in_vitro = formulation.get("in_vitro_performance", [])
+            if in_vitro and isinstance(in_vitro, list):
+                for test in in_vitro:
+                    dissolution = test.get("dissolution", {})
+                    for r in dissolution.get("results", []):
+                        if r.get("percent_released") and r.get("time_point"):
+                            key = f"dissolution_{r['time_point']}min"
+                            dissolution_metrics[key] = r["percent_released"]
+            
+            # Enriched metadata for all embeddings
+            enriched_metadata = {
+                "formulation_id": form_id,
+                "formulation_name": formulation.get("name", ""),
+                "document": doc_title,
+                "api_name": drug.get("name"),
+                "bcs_class": drug_metadata.get("bcs_class"),
+                "formulation_type": formulation.get("formulation_type"),
+                "dosage_form": formulation.get("dosage_form"),
+                "particle_size_nm": particle_size.get("value") if isinstance(particle_size, dict) else None,
+                "solubility": drug.get("solubility"),
+                **dissolution_metrics,
+            }
+            # Remove None values
+            enriched_metadata = {k: v for k, v in enriched_metadata.items() if v is not None}
+            
             # 1. Formulation Summary Embedding
             stats["formulation_summary"]["processed"] += 1
             try:
@@ -485,7 +519,7 @@ class EmbeddingIngestionService:
                         table="formulation_summary_embeddings",
                         text_content=text_content,
                         embedding=embedding,
-                        metadata={"formulation_id": form_id, "document": doc_title},
+                        metadata=enriched_metadata,
                         source_document_id=source_document_id,
                     )
                     stats["formulation_summary"]["embedded"] += 1
@@ -503,7 +537,7 @@ class EmbeddingIngestionService:
                         table="manufacturing_process_embeddings",
                         text_content=text_content,
                         embedding=embedding,
-                        metadata={"formulation_id": form_id, "document": doc_title},
+                        metadata=enriched_metadata,
                         source_document_id=source_document_id,
                     )
                     stats["manufacturing_process"]["embedded"] += 1
@@ -521,7 +555,7 @@ class EmbeddingIngestionService:
                         table="particle_analytics_embeddings",
                         text_content=text_content,
                         embedding=embedding,
-                        metadata={"formulation_id": form_id, "document": doc_title},
+                        metadata=enriched_metadata,
                         source_document_id=source_document_id,
                     )
                     stats["particle_analytics"]["embedded"] += 1
@@ -539,7 +573,7 @@ class EmbeddingIngestionService:
                         table="in_vitro_embeddings",
                         text_content=text_content,
                         embedding=embedding,
-                        metadata={"formulation_id": form_id, "document": doc_title},
+                        metadata=enriched_metadata,
                         source_document_id=source_document_id,
                     )
                     stats["in_vitro"]["embedded"] += 1
@@ -557,7 +591,7 @@ class EmbeddingIngestionService:
                         table="in_vivo_embeddings",
                         text_content=text_content,
                         embedding=embedding,
-                        metadata={"formulation_id": form_id, "document": doc_title},
+                        metadata=enriched_metadata,
                         source_document_id=source_document_id,
                     )
                     stats["in_vivo"]["embedded"] += 1

@@ -43,5 +43,17 @@ services:
       - ./backend/app:/app/app
     command: uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
 
+  pgweb:
+    image: sosedoff/pgweb
+    container_name: rag_pgweb
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/formulation_rag?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8081:8081"
+    restart: unless-stopped
+
 volumes:
   postgres_data:
