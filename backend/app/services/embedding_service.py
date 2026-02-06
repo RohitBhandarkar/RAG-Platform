@@ -175,27 +175,72 @@ class EmbeddingIngestionService:
         """Build text representation for formulation summary embedding."""
         parts = []
         
-        # API info from canonical root
+        # Formulation name
+        if formulation.get("name"):
+            parts.append(f"Formulation: {formulation['name']}")
+        
+        # Drug/API info - check both structures
+        drug = formulation.get("drug", {})
+        if drug.get("name"):
+            parts.append(f"API: {drug['name']}")
+        if drug.get("solubility"):
+            parts.append(f"Solubility: {drug['solubility']}")
+        metadata = drug.get("metadata", {})
+        if metadata.get("bcs_class"):
+            parts.append(f"BCS Class: {metadata['bcs_class']}")
+        
+        # Also check canonical root level api (alternate schema)
         api = canonical.get("api", {})
-        if api.get("name"):
+        if api.get("name") and not drug.get("name"):
             parts.append(f"API: {api['name']}")
-        if api.get("bcs_class"):
+        if api.get("bcs_class") and not metadata.get("bcs_class"):
             parts.append(f"BCS Class: {api['bcs_class']}")
-        if api.get("molecular_weight"):
-            parts.append(f"MW: {api['molecular_weight']}")
-        if api.get("aqueous_solubility"):
-            parts.append(f"Solubility: {api['aqueous_solubility']}")
         
-        # Formulation strategy
-        strategy = formulation.get("formulation_strategy", {})
-        if strategy.get("strategy_name"):
-            parts.append(f"Strategy: {strategy['strategy_name']}")
-        if strategy.get("description"):
-            parts.append(f"Description: {strategy['description']}")
+        # Formulation type and dosage form
+        if formulation.get("formulation_type"):
+            parts.append(f"Type: {formulation['formulation_type']}")
+        if formulation.get("dosage_form"):
+            parts.append(f"Dosage Form: {formulation['dosage_form']}")
         
-        # Components (excipients)
+        # Composition - active ingredients
+        composition = formulation.get("composition", {})
+        actives = composition.get("active_ingredients", [])
+        if actives:
+            active_list = []
+            for a in actives:
+                name = a.get("name", "")
+                conc = a.get("concentration")
+                unit = a.get("unit", "")
+                if name:
+                    if conc is not None:
+                        active_list.append(f"{name} {conc} {unit}".strip())
+                    else:
+                        active_list.append(name)
+            if active_list:
+                parts.append(f"Active ingredients: {', '.join(active_list)}")
+        
+        # Composition - excipients
+        excipients = composition.get("excipients", [])
+        if excipients:
+            exc_list = []
+            for e in excipients:
+                name = e.get("name", "")
+                role = e.get("role", "")
+                conc = e.get("concentration")
+                unit = e.get("unit", "")
+                if name:
+                    exc_str = f"{name}"
+                    if role:
+                        exc_str += f" ({role})"
+                    if conc is not None:
+                        exc_str += f" {conc} {unit}".strip()
+                    exc_list.append(exc_str)
+            if exc_list:
+                parts.append(f"Excipients: {', '.join(exc_list)}")
+        
+        # Also check old schema components
         components = formulation.get("components", [])
-        if components:
+        if components and not excipients:
             comp_list = []
             for comp in components:
                 name = comp.get("name", "")
@@ -211,42 +256,59 @@ class EmbeddingIngestionService:
             if comp_list:
                 parts.append(f"Components: {', '.join(comp_list)}")
         
-        # Stage
-        if formulation.get("stage"):
-            parts.append(f"Stage: {formulation['stage']}")
-        
         return ". ".join(parts) if parts else "Formulation data"
     
     def _build_manufacturing_text(self, formulation: dict) -> str:
         """Build text representation for manufacturing process embedding."""
         parts = []
         
+        # New schema: manufacturing
+        manufacturing = formulation.get("manufacturing", {})
+        if manufacturing:
+            if manufacturing.get("process_name"):
+                parts.append(f"Process: {manufacturing['process_name']}")
+            
+            params = manufacturing.get("process_parameters", {})
+            if params:
+                if params.get("equipment"):
+                    parts.append(f"Equipment: {params['equipment']}")
+                if params.get("speed") and params.get("speed_unit"):
+                    parts.append(f"Speed: {params['speed']} {params['speed_unit']}")
+                if params.get("duration") and params.get("duration_unit"):
+                    parts.append(f"Duration: {params['duration']} {params['duration_unit']}")
+                if params.get("milling_media"):
+                    parts.append(f"Milling media: {params['milling_media']}")
+                if params.get("milling_media_size"):
+                    parts.append(f"Bead size: {params['milling_media_size']} {params.get('milling_media_size_unit', 'mm')}")
+                if params.get("inlet_temperature"):
+                    parts.append(f"Inlet temp: {params['inlet_temperature']} {params.get('inlet_temperature_unit', '°C')}")
+                if params.get("outlet_temperature"):
+                    parts.append(f"Outlet temp: {params['outlet_temperature']} {params.get('outlet_temperature_unit', '°C')}")
+                if params.get("feed_rate"):
+                    parts.append(f"Feed rate: {params['feed_rate']} {params.get('feed_rate_unit', '')}")
+                if params.get("nozzle_diameter"):
+                    parts.append(f"Nozzle: {params['nozzle_diameter']} {params.get('nozzle_diameter_unit', 'mm')}")
+            
+            if manufacturing.get("yield"):
+                parts.append(f"Yield: {manufacturing['yield']} {manufacturing.get('yield_unit', '%')}")
+        
+        # Old schema: process
         process = formulation.get("process", {})
-        
-        if process.get("method"):
-            parts.append(f"Method: {process['method']}")
-        
-        # Milling parameters
-        milling = process.get("milling", {})
-        if milling:
-            milling_parts = []
-            if milling.get("time_min"):
-                milling_parts.append(f"Time: {milling['time_min']} min")
-            if milling.get("bead_size_mm"):
-                milling_parts.append(f"Bead size: {milling['bead_size_mm']} mm")
-            if milling.get("rpm"):
-                milling_parts.append(f"RPM: {milling['rpm']}")
-            if milling_parts:
-                parts.append(f"Milling: {', '.join(milling_parts)}")
-        
-        if process.get("solvent_system"):
-            parts.append(f"Solvent: {process['solvent_system']}")
-        if process.get("temperature_c"):
-            parts.append(f"Temperature: {process['temperature_c']}°C")
-        if process.get("mixing"):
-            parts.append(f"Mixing: {process['mixing']}")
-        if process.get("notes"):
-            parts.append(f"Notes: {process['notes']}")
+        if process and not manufacturing:
+            if process.get("method"):
+                parts.append(f"Method: {process['method']}")
+            
+            milling = process.get("milling", {})
+            if milling:
+                if milling.get("time_min"):
+                    parts.append(f"Milling time: {milling['time_min']} min")
+                if milling.get("bead_size_mm"):
+                    parts.append(f"Bead size: {milling['bead_size_mm']} mm")
+                if milling.get("rpm"):
+                    parts.append(f"RPM: {milling['rpm']}")
+            
+            if process.get("temperature_c"):
+                parts.append(f"Temperature: {process['temperature_c']}°C")
         
         return ". ".join(parts) if parts else "Manufacturing process data"
     
@@ -254,51 +316,136 @@ class EmbeddingIngestionService:
         """Build text representation for particle characteristics embedding."""
         parts = []
         
-        particle = formulation.get("particle_characteristics", {})
+        # New schema: physical_properties.particle
+        physical = formulation.get("physical_properties", {})
+        if physical:
+            particle = physical.get("particle", {})
+            if particle:
+                size = particle.get("particle_size", {})
+                if size.get("value"):
+                    parts.append(f"Particle size: {size['value']} {size.get('unit', 'nm')}")
+                    if size.get("std_dev"):
+                        parts.append(f"(SD: {size['std_dev']})")
+                    if size.get("method"):
+                        parts.append(f"Method: {size['method']}")
+                
+                pdi = particle.get("polydispersity_index", {})
+                if isinstance(pdi, dict) and pdi.get("value"):
+                    parts.append(f"PDI: {pdi['value']}")
+                elif pdi and not isinstance(pdi, dict):
+                    parts.append(f"PDI: {pdi}")
+            
+            solid_state = physical.get("solid_state_properties", {})
+            if solid_state:
+                if solid_state.get("crystallinity"):
+                    parts.append(f"Form: {solid_state['crystallinity']}")
+                if solid_state.get("thermal_analysis"):
+                    parts.append(f"Thermal: {solid_state['thermal_analysis']}")
+            
+            if physical.get("drug_loading"):
+                dl = physical["drug_loading"]
+                if isinstance(dl, dict):
+                    parts.append(f"Drug loading: {dl.get('value', '')} {dl.get('unit', '')}")
+                else:
+                    parts.append(f"Drug loading: {dl}")
+            
+            if physical.get("stability"):
+                parts.append(f"Stability: {physical['stability']}")
         
-        if particle.get("particle_size_distribution_nm"):
-            parts.append(f"Particle size: {particle['particle_size_distribution_nm']}")
-        if particle.get("zeta_potential_mv"):
-            parts.append(f"Zeta potential: {particle['zeta_potential_mv']} mV")
-        if particle.get("dissolution_profile"):
-            parts.append(f"Dissolution: {particle['dissolution_profile']}")
+        # Old schema: particle_characteristics
+        old_particle = formulation.get("particle_characteristics", {})
+        if old_particle and not physical:
+            if old_particle.get("particle_size_distribution_nm"):
+                parts.append(f"Particle size: {old_particle['particle_size_distribution_nm']}")
+            if old_particle.get("zeta_potential_mv"):
+                parts.append(f"Zeta potential: {old_particle['zeta_potential_mv']} mV")
         
         return ". ".join(parts) if parts else "Particle characteristics data"
     
     def _build_stability_text(self, formulation: dict) -> str:
-        """Build text representation for stability data (in_vitro category)."""
+        """Build text representation for in vitro performance (dissolution/stability)."""
         parts = []
         
+        # New schema: in_vitro_performance
+        in_vitro = formulation.get("in_vitro_performance", [])
+        if in_vitro and isinstance(in_vitro, list):
+            for idx, test in enumerate(in_vitro):
+                dissolution = test.get("dissolution", {})
+                if dissolution:
+                    if dissolution.get("medium"):
+                        parts.append(f"Medium: {dissolution['medium']}")
+                    
+                    conditions = dissolution.get("conditions", {})
+                    if conditions:
+                        if conditions.get("apparatus"):
+                            parts.append(f"Apparatus: {conditions['apparatus']}")
+                        if conditions.get("rotation_speed"):
+                            parts.append(f"RPM: {conditions['rotation_speed']}")
+                    
+                    results = dissolution.get("results", [])
+                    for r in results:
+                        if r.get("percent_released") and r.get("time_point"):
+                            parts.append(f"{r['percent_released']}% released at {r['time_point']} {r.get('time_unit', 'min')}")
+                        if r.get("qualitative"):
+                            parts.append(f"Result: {r['qualitative']}")
+        
+        # Physical properties stability
+        physical = formulation.get("physical_properties", {})
+        if physical.get("stability"):
+            parts.append(f"Stability: {physical['stability']}")
+        
+        # Old schema: stability
         stability = formulation.get("stability", {})
-        
-        if stability.get("conditions"):
-            parts.append(f"Conditions: {stability['conditions']}")
-        if stability.get("duration_months"):
-            parts.append(f"Duration: {stability['duration_months']} months")
-        if stability.get("summary"):
-            parts.append(f"Summary: {stability['summary']}")
-        
-        # Also include dissolution profile from particle_characteristics
-        particle = formulation.get("particle_characteristics", {})
-        if particle.get("dissolution_profile"):
-            parts.append(f"Dissolution: {particle['dissolution_profile']}")
+        if stability and not in_vitro:
+            if stability.get("conditions"):
+                parts.append(f"Conditions: {stability['conditions']}")
+            if stability.get("duration_months"):
+                parts.append(f"Duration: {stability['duration_months']} months")
+            if stability.get("summary"):
+                parts.append(f"Summary: {stability['summary']}")
         
         return ". ".join(parts) if parts else "Stability and in vitro data"
     
     def _build_pk_text(self, formulation: dict) -> str:
-        """Build text representation for PK study embedding."""
+        """Build text representation for PK/in vivo performance."""
         parts = []
         
-        pk = formulation.get("pharmacokinetics", {})
+        # New schema: in_vivo_performance
+        in_vivo = formulation.get("in_vivo_performance", {})
+        if in_vivo:
+            if in_vivo.get("animal_model"):
+                parts.append(f"Model: {in_vivo['animal_model']}")
+            
+            dose = in_vivo.get("dose", {})
+            if dose.get("value"):
+                parts.append(f"Dose: {dose['value']} {dose.get('unit', 'mg')}")
+            
+            pk = in_vivo.get("pharmacokinetics", {})
+            params = pk.get("parameters", {})
+            if params:
+                cmax = params.get("Cmax", {})
+                if cmax.get("value"):
+                    parts.append(f"Cmax: {cmax['value']} {cmax.get('unit', '')} (SD: {cmax.get('std_dev', 'N/A')})")
+                
+                tmax = params.get("Tmax", {})
+                if tmax.get("value"):
+                    parts.append(f"Tmax: {tmax['value']} {tmax.get('unit', 'h')}")
+                
+                auc = params.get("AUC", {})
+                if auc.get("value"):
+                    parts.append(f"AUC: {auc['value']} {auc.get('unit', '')} ({auc.get('interval', '')})")
         
-        if pk.get("relative_bioavailability"):
-            parts.append(f"Relative BA: {pk['relative_bioavailability']}%")
-        if pk.get("cmax"):
-            parts.append(f"Cmax: {pk['cmax']}")
-        if pk.get("auc"):
-            parts.append(f"AUC: {pk['auc']}")
-        if pk.get("tmax"):
-            parts.append(f"Tmax: {pk['tmax']}")
+        # Old schema: pharmacokinetics
+        old_pk = formulation.get("pharmacokinetics", {})
+        if old_pk and not in_vivo:
+            if old_pk.get("relative_bioavailability"):
+                parts.append(f"Relative BA: {old_pk['relative_bioavailability']}%")
+            if old_pk.get("cmax"):
+                parts.append(f"Cmax: {old_pk['cmax']}")
+            if old_pk.get("auc"):
+                parts.append(f"AUC: {old_pk['auc']}")
+            if old_pk.get("tmax"):
+                parts.append(f"Tmax: {old_pk['tmax']}")
         
         return ". ".join(parts) if parts else "Pharmacokinetic data"
     
