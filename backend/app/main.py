@@ -59,14 +59,15 @@ class VectorSearchQuery(BaseModel):
 	metadata_filter: dict | None = None
 
 
-# Create Enum for embedding table selection
-EmbeddingTableName = Enum("EmbeddingTableName", {
-	"formulation_summary": "formulation_summary_embeddings",
-	"manufacturing_process": "manufacturing_process_embeddings",
-	"particle_analytics": "particle_analytics_embeddings",
-	"in_vitro": "in_vitro_embeddings",
-	"in_vivo": "in_vivo_embeddings",
-})
+class CanonicalEmbeddingRequest(BaseModel):
+	"""Request body for ingesting embeddings from canonical JSON."""
+	canonical_json: dict
+	source_document_id: int | None = None
+
+
+class TextEmbeddingRequest(BaseModel):
+	"""Request body for generating a single text embedding."""
+	text: str
 
 
 @app.get("/")
@@ -432,29 +433,34 @@ def embedding_health():
 		}
 
 
-@embedding_router.post("/ingest", summary="Run full embedding ingestion")
-def embedding_ingest_all():
+@embedding_router.post("/ingest", summary="Ingest embeddings from canonical JSON")
+def embedding_ingest_canonical(body: CanonicalEmbeddingRequest):
 	"""
-	Generate and store embeddings for ALL structured data.
+	Generate and store embeddings from a canonical JSON document.
 	
-	This triggers embedding generation for:
-	- formulation_summary_embeddings (from formulations + excipients + APIs)
-	- manufacturing_process_embeddings (from manufacturing_processes + parameters)
-	- particle_analytics_embeddings (from particle_characteristics + analytical_results)
-	- in_vitro_embeddings (from dissolution_profiles + timepoints)
-	- in_vivo_embeddings (from pk_studies + pk_parameters + BE results)
+	This processes the canonical JSON and creates embeddings for:
+	- formulation_summary_embeddings (API + formulation strategy + components)
+	- manufacturing_process_embeddings (process method, milling, temperature)
+	- particle_analytics_embeddings (particle size, zeta potential)
+	- in_vitro_embeddings (stability, dissolution profile)
+	- in_vivo_embeddings (PK parameters: Cmax, AUC, Tmax, BA)
 	
-	⚠️ This is a long-running operation. Each record makes an API call to Vertex AI.
+	Each formulation in the canonical JSON generates up to 5 embeddings.
+	
+	⚠️ Each embedding makes an API call to Vertex AI text-embedding-004.
 	"""
 	try:
 		ingestion_service = EmbeddingIngestionService()
-		results = ingestion_service.ingest_all_embeddings()
+		results = ingestion_service.ingest_from_canonical(
+			canonical=body.canonical_json,
+			source_document_id=body.source_document_id,
+		)
 		
 		total_embedded = sum(
-			r.get("embedded", 0) for r in results.values() if isinstance(r, dict) and "embedded" in r
+			r.get("embedded", 0) for r in results.values() if isinstance(r, dict)
 		)
 		total_errors = sum(
-			r.get("errors", 0) for r in results.values() if isinstance(r, dict) and "errors" in r
+			r.get("errors", 0) for r in results.values() if isinstance(r, dict)
 		)
 		
 		return {
@@ -467,51 +473,26 @@ def embedding_ingest_all():
 		raise HTTPException(status_code=500, detail=f"Embedding ingestion failed: {e}")
 
 
-@embedding_router.post("/ingest/{table}", summary="Run embedding ingestion for specific table")
-def embedding_ingest_table(table: EmbeddingTableName):
+@embedding_router.post("/preview", summary="Preview embedding texts from canonical JSON")
+def embedding_preview(body: CanonicalEmbeddingRequest):
 	"""
-	Generate and store embeddings for a specific data category.
+	Preview the text content that would be embedded from a canonical JSON.
 	
-	Choose from:
-	- formulation_summary: Drug formulations with excipients and APIs
-	- manufacturing_process: Manufacturing processes with parameters
-	- particle_analytics: Particle characteristics and analytical results
-	- in_vitro: Dissolution profiles and timepoints
-	- in_vivo: PK studies with parameters and BE results
+	This does NOT generate embeddings or call Vertex AI.
+	Use this to verify what text will be embedded before running ingestion.
+	
+	Returns the constructed text for each embedding category per formulation.
 	"""
 	try:
 		ingestion_service = EmbeddingIngestionService()
-		
-		# Map table enum to ingestion method
-		method_map = {
-			"formulation_summary_embeddings": ingestion_service.ingest_formulation_embeddings,
-			"manufacturing_process_embeddings": ingestion_service.ingest_manufacturing_embeddings,
-			"particle_analytics_embeddings": ingestion_service.ingest_particle_analytics_embeddings,
-			"in_vitro_embeddings": ingestion_service.ingest_in_vitro_embeddings,
-			"in_vivo_embeddings": ingestion_service.ingest_in_vivo_embeddings,
-		}
-		
-		table_name = table.value
-		if table_name not in method_map:
-			raise HTTPException(status_code=400, detail=f"Unknown embedding table: {table_name}")
-		
-		result = method_map[table_name]()
-		
-		return {
-			"status": "completed",
-			"table": table_name,
-			"processed": result.get("processed", 0),
-			"embedded": result.get("embedded", 0),
-			"errors": result.get("errors", 0),
-		}
-	except HTTPException:
-		raise
+		preview = ingestion_service.get_embedding_texts_preview(body.canonical_json)
+		return preview
 	except Exception as e:
-		raise HTTPException(status_code=500, detail=f"Embedding ingestion failed: {e}")
+		raise HTTPException(status_code=500, detail=f"Preview failed: {e}")
 
 
 @embedding_router.post("/generate", summary="Generate embedding for text")
-def embedding_generate(text: str):
+def embedding_generate(body: TextEmbeddingRequest):
 	"""
 	Generate a 768-dimensional embedding vector for the given text.
 	
@@ -524,10 +505,10 @@ def embedding_generate(text: str):
 	"""
 	try:
 		embedding_service = EmbeddingService()
-		embedding = embedding_service.generate_embedding(text)
+		embedding = embedding_service.generate_embedding(body.text)
 		
 		return {
-			"text": text[:100] + "..." if len(text) > 100 else text,
+			"text": body.text[:100] + "..." if len(body.text) > 100 else body.text,
 			"model": embedding_service.model,
 			"dimension": len(embedding),
 			"embedding": embedding,
