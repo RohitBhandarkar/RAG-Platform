@@ -117,22 +117,17 @@ jobs:
             --zone=${{ secrets.GCP_VM_ZONE }} \
             --tunnel-through-iap \
             --command="
-              echo '=== Checking backend health endpoint ==='
-              curl -f http://localhost:8080/health || exit 1
-              echo ''
-              curl -f http://localhost:8080/health/storage || exit 1
-              echo ''
               echo '=== Checking LLM health endpoint ==='
               curl -f http://localhost:8080/health/llm || exit 1
               echo ''
-              echo '=== Checking PostgreSQL health endpoint ==='
-              curl -s http://localhost:8080/health/postgres | jq .
+              echo '=== Checking database health endpoint ==='
+              curl -s http://localhost:8080/health/database | jq .
               echo ''
-              echo '=== Checking pgvector health endpoint ==='
-              curl -s http://localhost:8080/health/vector | jq .
+              echo '=== Checking combined health endpoint ==='
+              curl -s http://localhost:8080/health/all | jq .
               echo ''
-              echo '=== Checking full database health ==='
-              curl -s http://localhost:8080/health/database/full | jq .
+              echo '=== Checking embeddings health endpoint ==='
+              curl -s http://localhost:8080/health/embeddings | jq .
               echo ''
               echo '=== Deployment successful ==='
             "
