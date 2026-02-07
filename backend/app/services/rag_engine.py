@@ -1,12 +1,11 @@
 """RAG engine: retrieve context, generate markdown report via Vertex AI, convert to PDF."""
 
-import json
 import logging
 from io import BytesIO
 from typing import Any, Dict, List, Tuple
 
 import markdown
-from weasyprint import HTML
+from xhtml2pdf import pisa
 
 from app.db import vector_search, get_formulation_context_by_uids
 from app.services.embedding_service import EmbeddingService
@@ -115,7 +114,7 @@ Output ONLY valid Markdown. No preamble or meta-commentary."""
 
 
 def markdown_to_pdf(md_content: str) -> bytes:
-    """Convert markdown string to PDF bytes for a neat experiment report."""
+    """Convert markdown string to PDF bytes (pure Python, no system libs)."""
     html_body = markdown.markdown(
         md_content,
         extensions=["extra", "nl2br"],
@@ -125,7 +124,7 @@ def markdown_to_pdf(md_content: str) -> bytes:
 <head>
 <meta charset="utf-8">
 <style>
-body {{ font-family: 'Helvetica', 'Arial', sans-serif; margin: 2cm; line-height: 1.5; color: #333; }}
+body {{ font-family: Helvetica, Arial, sans-serif; margin: 2cm; line-height: 1.5; color: #333; }}
 h1 {{ font-size: 1.5em; border-bottom: 2px solid #333; padding-bottom: 0.3em; }}
 h2 {{ font-size: 1.2em; margin-top: 1.2em; }}
 h3 {{ font-size: 1.05em; margin-top: 0.8em; }}
@@ -139,7 +138,7 @@ strong {{ font-weight: 600; }}
 </body>
 </html>"""
     buf = BytesIO()
-    HTML(string=html_doc).write_pdf(buf)
+    pisa.CreatePDF(html_doc, dest=buf, encoding="utf-8")
     return buf.getvalue()
 
 
