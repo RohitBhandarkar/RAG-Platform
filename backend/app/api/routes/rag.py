@@ -159,9 +159,10 @@ def get_rag_query(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+    pdf_b64 = base64.b64encode(pdf_bytes).decode("ascii")
 
     if format == "pdf":
-        decoded_pdf = base64.b64decode(pdf_bytes)
+        decoded_pdf = base64.b64decode(pdf_b64)
         return Response(
             content=decoded_pdf,
             media_type="application/pdf",
