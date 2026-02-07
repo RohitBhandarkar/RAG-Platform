@@ -1,9 +1,10 @@
 """RAG context endpoint: user API input -> K nearest embeddings + formulation details."""
 
 import base64
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from app.db import vector_search, get_formulation_context_by_uids
@@ -135,16 +136,20 @@ def get_rag_context(body: RAGContextRequest) -> RAGContextResponse:
 @router.post(
     "/query",
     summary="Generate experiment report (markdown + PDF) from user API input",
-    response_model=RAGQueryResponse,
-    response_description="Markdown report and PDF (base64) so you can view both and verify PDF conversion",
+    response_description="JSON with markdown + pdf_base64, or raw PDF when format=pdf",
 )
-def get_rag_query(body: RAGContextRequest) -> RAGQueryResponse:
+def get_rag_query(
+    body: RAGContextRequest,
+    format: Literal["json", "pdf"] = Query(
+        "json",
+        description="Response format: 'json' (markdown + pdf_base64) or 'pdf' (direct PDF download)",
+    ),
+):
     """
     Same input as /RAG/context. Retrieves context, then uses Vertex AI to generate a markdown
-    experiment report (excipients with amounts when available, experiments to conduct).
-    Converts markdown to a formatted PDF (headings, paragraphs, bullets) and returns both
-    the markdown (source) and the PDF as base64. Use markdown to verify content if the
-    PDF converter is faulty. All content is grounded in retrieved context only.
+    experiment report. Converts to PDF and returns:
+    - **format=json** (default): JSON with `markdown` and `pdf_base64` (decode base64 to get PDF bytes).
+    - **format=pdf**: Raw PDF file with Content-Disposition: attachment so the browser downloads it.
     """
     try:
         md_output, pdf_bytes = generate_report(body, llm_base_url="vertex")
@@ -155,5 +160,12 @@ def get_rag_query(body: RAGContextRequest) -> RAGQueryResponse:
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+    if format == "pdf":
+        filename = "formulation_experiment_report.pdf"
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
     pdf_b64 = base64.b64encode(pdf_bytes).decode("ascii")
     return RAGQueryResponse(markdown=md_output, pdf_base64=pdf_b64)
