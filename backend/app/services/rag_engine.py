@@ -1,13 +1,16 @@
 """RAG engine: retrieve context, generate markdown report via Vertex AI, convert to PDF."""
 
-import html
 import logging
+import re
 from html.parser import HTMLParser
 from io import BytesIO
 from typing import Any, Dict, List, Tuple
 
 import markdown
-from fpdf import FPDF
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import cm
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
 
 from app.db import vector_search, get_formulation_context_by_uids
 from app.services.embedding_service import EmbeddingService
@@ -116,98 +119,141 @@ Output ONLY valid Markdown. No preamble or meta-commentary."""
 
 
 def markdown_to_pdf(md_content: str) -> bytes:
-    """Convert markdown string to PDF bytes using fpdf2 (pure Python, no system libs)."""
+    """Convert markdown to PDF using ReportLab (Unicode-safe, good formatting)."""
     html_body = markdown.markdown(
         md_content,
         extensions=["extra", "nl2br"],
     )
-    return _html_to_pdf(html_body)
+    return _html_to_pdf_reportlab(html_body)
 
 
-def _html_to_pdf(html_fragment: str) -> bytes:
-    """Render HTML fragment (from markdown) to PDF using fpdf2 (pure Python, no system deps)."""
-    # Normalize: wrap in a div so we have one root if fragment is multiple roots
-    normalized = f"<div>{html_fragment}</div>" if not html_fragment.strip().startswith("<") else html_fragment
-    parser = _HtmlToFpdfParser()
-    parser.feed(normalized)
+def _reportlab_markup(inner_html: str) -> str:
+    """Normalize HTML for ReportLab Paragraph: <strong> -> <b>, escape &."""
+    s = inner_html.strip()
+    s = re.sub(r"<strong>", "<b>", s, flags=re.I)
+    s = re.sub(r"</strong>", "</b>", s, flags=re.I)
+    s = s.replace("&", "&amp;")
+    return s
 
-    pdf = FPDF()
-    pdf.set_auto_page_break(auto=True, margin=15)
-    pdf.add_page()
-    pdf.set_margins(20, 20, 20)
-    pdf.set_auto_page_break(auto=True, margin=20)
-    pdf.set_font("Helvetica", size=11)
 
-    for item in parser.elements:
+def _html_to_pdf_reportlab(html_fragment: str) -> bytes:
+    """Render HTML fragment to PDF with ReportLab (Unicode, headings, lists, bold)."""
+    parser = _BlockHtmlParser()
+    parser.feed(html_fragment.strip())
+    elements = parser.elements
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=A4,
+        leftMargin=1.5 * cm,
+        rightMargin=1.5 * cm,
+        topMargin=1.5 * cm,
+        bottomMargin=1.5 * cm,
+    )
+    styles = getSampleStyleSheet()
+    h1_style = ParagraphStyle(
+        "CustomH1",
+        parent=styles["Heading1"],
+        fontSize=16,
+        spaceAfter=8,
+        spaceBefore=4,
+    )
+    h2_style = ParagraphStyle(
+        "CustomH2",
+        parent=styles["Heading2"],
+        fontSize=14,
+        spaceAfter=6,
+        spaceBefore=10,
+    )
+    h3_style = ParagraphStyle(
+        "CustomH3",
+        parent=styles["Heading3"],
+        fontSize=12,
+        spaceAfter=4,
+        spaceBefore=8,
+    )
+    body_style = ParagraphStyle(
+        "CustomBody",
+        parent=styles["Normal"],
+        fontSize=11,
+        spaceAfter=6,
+        spaceBefore=0,
+    )
+    list_style = ParagraphStyle(
+        "CustomList",
+        parent=styles["Normal"],
+        fontSize=11,
+        leftIndent=20,
+        spaceAfter=2,
+        bulletIndent=10,
+    )
+
+    story: List[Any] = []
+    for item in elements:
         kind = item["kind"]
-        text = item.get("text", "").strip()
+        raw = item.get("inner_html", "").strip()
+        markup = _reportlab_markup(raw)
+        if not markup:
+            continue
         if kind == "h1":
-            pdf.set_font("Helvetica", "B", 16)
-            pdf.ln(4)
-            pdf.multi_cell(0, 8, text)
-            pdf.ln(2)
-            pdf.set_font("Helvetica", "", 11)
+            story.append(Paragraph(markup, h1_style))
         elif kind == "h2":
-            pdf.set_font("Helvetica", "B", 14)
-            pdf.ln(4)
-            pdf.multi_cell(0, 7, text)
-            pdf.ln(2)
-            pdf.set_font("Helvetica", "", 11)
+            story.append(Paragraph(markup, h2_style))
         elif kind == "h3":
-            pdf.set_font("Helvetica", "B", 12)
-            pdf.ln(3)
-            pdf.multi_cell(0, 6, text)
-            pdf.ln(1)
-            pdf.set_font("Helvetica", "", 11)
+            story.append(Paragraph(markup, h3_style))
         elif kind == "p":
-            pdf.ln(2)
-            pdf.multi_cell(0, 6, html.unescape(text))
-            pdf.ln(1)
+            story.append(Paragraph(markup, body_style))
         elif kind == "li":
-            pdf.set_font("Helvetica", "", 11)
-            pdf.multi_cell(0, 6, html.unescape("  \u2022 " + text))
-            pdf.ln(1)
+            # ReportLab Paragraph supports Unicode; bullet is safe
+            story.append(Paragraph("&#8226; " + markup, list_style))
         elif kind == "br":
-            pdf.ln(4)
+            story.append(Spacer(1, 12))
 
-    out = pdf.output(dest="S")
-    return out.encode("latin-1") if isinstance(out, str) else out
+    doc.build(story)
+    return buf.getvalue()
 
 
-class _HtmlToFpdfParser(HTMLParser):
-    """Collect block elements and text for PDF rendering."""
+class _BlockHtmlParser(HTMLParser):
+    """Extract block elements with their inner HTML for ReportLab."""
 
     BLOCK_TAGS = {"h1", "h2", "h3", "p", "li", "br"}
-    HEADING_TAGS = {"h1", "h2", "h3"}
 
     def __init__(self) -> None:
         super().__init__()
         self.elements: List[Dict[str, Any]] = []
-        self._current: Dict[str, Any] = {}
         self._stack: List[str] = []
-        self._text: List[str] = []
+        self._current_tag: str | None = None
+        self._inner_parts: List[str] = []
 
     def handle_starttag(self, tag: str, attrs: List[Tuple[str, str | None]]) -> None:
-        self._stack.append(tag)
         if tag in self.BLOCK_TAGS:
-            self._current = {"kind": tag, "text": ""}
-            self._text = []
+            if tag == "br":
+                if self._current_tag:
+                    self._inner_parts.append("<br/>")
+                else:
+                    self.elements.append({"kind": "br", "inner_html": ""})
+                return
+            self._stack.append(tag)
+            self._current_tag = tag
+            self._inner_parts = []
+        elif self._current_tag and self._inner_parts is not None:
+            attrs_str = "".join(f' {k}="{v}"' for k, v in attrs if v)
+            self._inner_parts.append(f"<{tag}{attrs_str}>")
 
     def handle_endtag(self, tag: str) -> None:
-        if self._stack and self._stack[-1] == tag:
-            self._stack.pop()
-        if tag in self.BLOCK_TAGS and self._current.get("kind") == tag:
-            text = "".join(self._text).strip()
-            self._current["text"] = text
-            self.elements.append(dict(self._current))
-            self._current = {}
-            self._text = []
+        if self._current_tag and tag == self._current_tag:
+            inner = "".join(self._inner_parts).strip()
+            self.elements.append({"kind": tag, "inner_html": inner})
+            self._current_tag = None
+            if self._stack and self._stack[-1] == tag:
+                self._stack.pop()
+        elif self._current_tag and self._inner_parts is not None:
+            self._inner_parts.append(f"</{tag}>")
 
     def handle_data(self, data: str) -> None:
-        if self._current:
-            self._text.append(data)
-        elif self._stack and self._stack[-1] in self.BLOCK_TAGS:
-            self._text.append(data)
+        if self._current_tag and self._inner_parts is not None:
+            self._inner_parts.append(data)
 
 
 def generate_report(
