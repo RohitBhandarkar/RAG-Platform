@@ -20,6 +20,7 @@ from app.db import (
 )
 from app.storage import ensure_layout, summarize_layout, list_files
 from app.api.routes import documents as documents_routes
+from app.api.routes import rag as rag_routes
 from app.services.llm_service import LLMService
 from app.services.embedding_service import EmbeddingService, EmbeddingIngestionService
 
@@ -414,6 +415,7 @@ app.include_router(health_router)
 app.include_router(query_router)
 app.include_router(embedding_router)
 app.include_router(documents_routes.router)
+app.include_router(rag_routes.router)
 
 
 __all__ = ["app"]

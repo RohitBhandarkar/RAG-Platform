@@ -68,6 +68,15 @@ EMBEDDING_TABLES = [
     "document_chunk_embeddings",
 ]
 
+# Tables that have formulation_uid column (for RAG context linking)
+EMBEDDING_TABLES_WITH_UID = [
+    "formulation_summary_embeddings",
+    "manufacturing_process_embeddings",
+    "particle_analytics_embeddings",
+    "in_vitro_embeddings",
+    "in_vivo_embeddings",
+]
+
 
 def validate_sql_tables() -> dict:
     """
@@ -228,17 +237,30 @@ def vector_search(
     
     # Convert embedding list to pgvector format
     embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
-    
-    # Build query with optional metadata filter
-    base_query = f"""
-        SELECT 
-            id,
-            text_content,
-            1 - (embedding <=> CAST(:embedding AS vector)) as similarity,
-            metadata
-        FROM {table}
-        WHERE embedding IS NOT NULL
-    """
+    include_uid = table in EMBEDDING_TABLES_WITH_UID
+
+    # Build query; include formulation_uid when present for RAG context
+    if include_uid:
+        base_query = f"""
+            SELECT 
+                id,
+                text_content,
+                1 - (embedding <=> CAST(:embedding AS vector)) as similarity,
+                metadata,
+                formulation_uid
+            FROM {table}
+            WHERE embedding IS NOT NULL
+        """
+    else:
+        base_query = f"""
+            SELECT 
+                id,
+                text_content,
+                1 - (embedding <=> CAST(:embedding AS vector)) as similarity,
+                metadata
+            FROM {table}
+            WHERE embedding IS NOT NULL
+        """
     
     if metadata_filter:
         # Add JSONB containment filter
@@ -259,15 +281,119 @@ def vector_search(
             result = connection.execute(text(base_query), params)
             rows = []
             for row in result.fetchall():
-                rows.append({
+                out = {
                     "id": row[0],
                     "text_content": row[1],
                     "similarity": float(row[2]) if row[2] else 0.0,
                     "metadata": row[3],
-                })
+                }
+                if include_uid:
+                    out["formulation_uid"] = row[4]
+                rows.append(out)
             return rows
     except Exception as e:
         raise RuntimeError(f"Vector search failed: {e}")
+
+
+def get_formulation_context_by_uids(formulation_uids: list[str]) -> list[dict]:
+    """
+    Fetch full formulation context (formulation + excipients + manufacturing) by formulation_uid list.
+
+    Returns one dict per formulation with keys: formulation, excipients, manufacturing_processes.
+    Formulations not found are skipped; order is not guaranteed.
+    """
+    if not formulation_uids:
+        return []
+    uids = [u for u in formulation_uids if u]
+    if not uids:
+        return []
+    try:
+        with engine.connect() as connection:
+            # formulations by formulation_uid
+            placeholders = ", ".join([f":uid{i}" for i in range(len(uids))])
+            params = {f"uid{i}": uids[i] for i in range(len(uids))}
+            result = connection.execute(
+                text(f"""
+                    SELECT id, formulation_uid, source_document_id, api_id, formulation_name,
+                           drug_name, dosage_form, formulation_type, bcs_class,
+                           route_of_administration, therapeutic_area, created_at, metadata
+                    FROM formulations
+                    WHERE formulation_uid IN ({placeholders})
+                """),
+                params,
+            )
+            form_rows = result.fetchall()
+            if not form_rows:
+                return []
+            form_by_id = {}
+            form_by_uid = {}
+            for r in form_rows:
+                fid = r[0]
+                uid = r[1]
+                form_by_id[fid] = {
+                    "id": fid,
+                    "formulation_uid": uid,
+                    "source_document_id": r[2],
+                    "api_id": r[3],
+                    "formulation_name": r[4],
+                    "drug_name": r[5],
+                    "dosage_form": r[6],
+                    "formulation_type": r[7],
+                    "bcs_class": r[8],
+                    "route_of_administration": r[9],
+                    "therapeutic_area": r[10],
+                    "created_at": str(r[11]) if r[11] else None,
+                    "metadata": r[12],
+                    "excipients": [],
+                    "manufacturing_processes": [],
+                }
+                form_by_uid[uid] = form_by_id[fid]
+            fids = list(form_by_id.keys())
+
+            # formulation_excipients + excipients
+            fid_placeholders = ", ".join([f":fid{i}" for i in range(len(fids))])
+            fid_params = {f"fid{i}": fids[i] for i in range(len(fids))}
+            exc_result = connection.execute(
+                text(f"""
+                    SELECT fe.formulation_id, e.name, fe.amount, fe.unit, fe.role
+                    FROM formulation_excipients fe
+                    JOIN excipients e ON e.id = fe.excipient_id
+                    WHERE fe.formulation_id IN ({fid_placeholders})
+                """),
+                fid_params,
+            )
+            for r in exc_result.fetchall():
+                form_by_id[r[0]]["excipients"].append({
+                    "name": r[1],
+                    "amount": float(r[2]) if r[2] is not None else None,
+                    "unit": r[3],
+                    "role": r[4],
+                })
+
+            # manufacturing_processes
+            mp_result = connection.execute(
+                text(f"""
+                    SELECT formulation_id, id, process_type, process_description,
+                           batch_size, scale, equipment_used, metadata
+                    FROM manufacturing_processes
+                    WHERE formulation_id IN ({fid_placeholders})
+                """),
+                fid_params,
+            )
+            for r in mp_result.fetchall():
+                form_by_id[r[0]]["manufacturing_processes"].append({
+                    "id": r[1],
+                    "process_type": r[2],
+                    "process_description": r[3],
+                    "batch_size": r[4],
+                    "scale": r[5],
+                    "equipment_used": list(r[6]) if r[6] else [],
+                    "metadata": r[7],
+                })
+
+            return [form_by_uid[uid] for uid in uids if uid in form_by_uid]
+    except Exception as e:
+        raise RuntimeError(f"get_formulation_context_by_uids failed: {e}")
 
 
 def insert_embedding(
