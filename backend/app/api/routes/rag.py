@@ -136,20 +136,19 @@ def get_rag_context(body: RAGContextRequest) -> RAGContextResponse:
 @router.post(
     "/query",
     summary="Generate experiment report (markdown + PDF) from user API input",
-    response_description="JSON with markdown + pdf_base64, or raw PDF when format=pdf",
+    response_description="JSON with markdown + pdf_base64, or raw PDF when format=pdf for direct download",
 )
 def get_rag_query(
     body: RAGContextRequest,
     format: Literal["json", "pdf"] = Query(
         "json",
-        description="Response format: 'json' (markdown + pdf_base64) or 'pdf' (direct PDF download)",
+        description="'json' = markdown + pdf_base64; 'pdf' = raw PDF file (direct download, e.g. from Swagger)",
     ),
 ):
     """
-    Same input as /RAG/context. Retrieves context, then uses Vertex AI to generate a markdown
-    experiment report. Converts to PDF and returns:
-    - **format=json** (default): JSON with `markdown` and `pdf_base64` (decode base64 to get PDF bytes).
-    - **format=pdf**: Raw PDF file with Content-Disposition: attachment so the browser downloads it.
+    Same input as /RAG/context. Generates report and returns either:
+    - **format=json** (default): JSON with `markdown` and `pdf_base64`.
+    - **format=pdf**: Raw PDF with Content-Disposition attachment so the browser/Swagger triggers a download.
     """
     try:
         md_output, pdf_bytes = generate_report(body, llm_base_url="vertex")
@@ -160,12 +159,12 @@ def get_rag_query(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
     if format == "pdf":
-        filename = "formulation_experiment_report.pdf"
+        decoded_pdf = base64.b64decode(pdf_bytes)
         return Response(
-            content=pdf_bytes,
+            content=decoded_pdf,
             media_type="application/pdf",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            headers={"Content-Disposition": 'attachment; filename="formulation_experiment_report.pdf"'},
         )
-    pdf_b64 = base64.b64encode(pdf_bytes).decode("ascii")
     return RAGQueryResponse(markdown=md_output, pdf_base64=pdf_b64)

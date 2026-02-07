@@ -128,10 +128,12 @@ def markdown_to_pdf(md_content: str) -> bytes:
 
 
 def _reportlab_markup(inner_html: str) -> str:
-    """Normalize HTML for ReportLab Paragraph: <strong> -> <b>, escape &."""
+    """Normalize HTML for ReportLab Paragraph: <strong> -> <b>, escape &, fix invalid </br>."""
     s = inner_html.strip()
     s = re.sub(r"<strong>", "<b>", s, flags=re.I)
     s = re.sub(r"</strong>", "</b>", s, flags=re.I)
+    # ReportLab has no _selfClosingTag for </br>; remove invalid closing tag (only <br/> is valid).
+    s = re.sub(r"</br\s*>", "", s, flags=re.I)
     s = s.replace("&", "&amp;")
     return s
 
