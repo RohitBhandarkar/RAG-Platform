@@ -18,6 +18,65 @@ from app.services.llm_service import LLMService
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Confidence strategy: per-excipient confidence is derived from retrieved
+# formulation_details only. For each excipient we count (1) how many
+# formulations list it and (2) whether any of those list an amount.
+# - High:  in >=2 formulations AND at least one lists an amount.
+# - Medium: in >=2 formulations (any amount), OR in 1 formulation with amount.
+# - Low:   in exactly 1 formulation and no amount specified.
+# ---------------------------------------------------------------------------
+
+
+def _normalize_excipient_name(name: str) -> str:
+    """Normalize for matching: lowercase, strip, collapse spaces."""
+    if not name or not isinstance(name, str):
+        return ""
+    return " ".join(name.lower().strip().split())
+
+
+def _compute_excipient_confidence(
+    formulation_details: List[Dict[str, Any]],
+) -> Dict[str, Dict[str, Any]]:
+    """
+    Compute confidence per excipient from retrieved formulations.
+    Returns dict: normalized_name -> { display_name, formulation_count, has_amount, confidence }.
+    """
+    # aggregated by normalized name: { count, has_amount, display_name }
+    agg: Dict[str, Dict[str, Any]] = {}
+    n_forms = len(formulation_details) or 1
+    for form in formulation_details or []:
+        for e in form.get("excipients") or []:
+            name = (e.get("name") or "").strip()
+            if not name:
+                continue
+            key = _normalize_excipient_name(name)
+            if not key:
+                continue
+            if key not in agg:
+                agg[key] = {"display_name": name, "formulation_count": 0, "has_amount": False}
+            agg[key]["formulation_count"] += 1
+            if e.get("amount") is not None:
+                agg[key]["has_amount"] = True
+    # assign confidence tier
+    result: Dict[str, Dict[str, Any]] = {}
+    for key, v in agg.items():
+        count = v["formulation_count"]
+        has_amount = v["has_amount"]
+        if count >= 2 and has_amount:
+            tier = "High"
+        elif count >= 2 or (count == 1 and has_amount):
+            tier = "Medium"
+        else:
+            tier = "Low"
+        result[key] = {
+            "display_name": v["display_name"],
+            "formulation_count": count,
+            "has_amount": has_amount,
+            "confidence": tier,
+        }
+    return result
+
 
 def _build_query_text_from_body(body: Any) -> str:
     """Build search query from strict API properties (same as RAG context endpoint)."""
@@ -99,6 +158,17 @@ def _build_report_prompt(
     for i, row in enumerate(nearest_embeddings[:10], 1):
         context_parts.append(f"[{i}] {row.get('text_content', '')[:800]}")
 
+    # Excipient confidence (from formulation count + amount presence)
+    confidence_map = _compute_excipient_confidence(formulation_details)
+    context_parts.append("\n## Excipient metadata (include in report for each excipient)\n")
+    if not confidence_map:
+        context_parts.append("(No excipients in retrieved formulations.)")
+    else:
+        for key, meta in confidence_map.items():
+            display = meta.get("display_name", key)
+            conf = meta.get("confidence", "Low")
+            context_parts.append(f"- **{display}**: Confidence = {conf}")
+
     context_str = "\n\n".join(context_parts)
 
     system = """You are a pharmaceutical formulation scientist. Write a clear, professional **experiment report** in Markdown format.
@@ -109,7 +179,9 @@ Your report must include the following sections (use only information from the c
 
 1. **Title** – e.g. "Formulation Experiment Report" and a one-line summary of the input API properties.
 2. **Input API summary** – Brief summary of the queried properties (molecular weight, BCS class, etc.).
-3. **Recommended excipients** – List the kinds of excipients that can be used, as suggested by the retrieved formulations. For each excipient, state the **amount** only if it appears in the context (e.g. "X mg", "% w/w"); otherwise write "amount not specified in source".
+3. **Recommended excipients** – For each excipient suggested by the retrieved formulations:
+   - Name and **amount** only if it appears in the context (e.g. "X mg", "% w/w"); otherwise write "amount not specified in source".
+   - **Confidence**: Use exactly the value from "Excipient metadata" (High / Medium / Low) for that excipient.
 4. **Experiments to conduct** – Based on the retrieved context, list what experiments can be performed to test these formulations (e.g. dissolution, stability, particle size, bioavailability). Only include experiments that are mentioned or clearly implied in the provided context.
 5. **Source summary** – One short paragraph noting that recommendations are based on retrieved literature/formulation data.
 
