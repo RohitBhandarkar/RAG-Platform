@@ -199,7 +199,7 @@ async def ingest_pdf_to_database(
 
 		logger.info(f"Database ingestion complete: {db_stats}")
 
-		# Step 3: Generate and store embeddings (if enabled)
+		# Step 3: Generate and store embeddings (if enabled; same source_id so formulation_uid matches DB)
 		embedding_stats = None
 		if generate_embeddings:
 			try:
@@ -207,6 +207,7 @@ async def ingest_pdf_to_database(
 				embedding_stats = embedding_service.ingest_from_canonical(
 					canonical=canonical,
 					source_document_id=db_stats.get("source_document_id"),
+					source_id=file.filename,
 				)
 				logger.info(f"Embedding ingestion complete: {embedding_stats}")
 			except Exception as e:
@@ -313,7 +314,7 @@ async def ingest_canonical_json(
 
 		logger.info(f"Database ingestion complete: {db_stats}")
 
-		# Step 2: Generate and store embeddings (if enabled)
+		# Step 2: Generate and store embeddings (if enabled; same source_id so formulation_uid matches DB)
 		embedding_stats = None
 		if generate_embeddings:
 			try:
@@ -321,6 +322,7 @@ async def ingest_canonical_json(
 				embedding_stats = embedding_service.ingest_from_canonical(
 					canonical=canonical,
 					source_document_id=db_stats.get("source_document_id"),
+					source_id=effective_source_id,
 				)
 				logger.info(f"Embedding ingestion complete: {embedding_stats}")
 			except Exception as e:

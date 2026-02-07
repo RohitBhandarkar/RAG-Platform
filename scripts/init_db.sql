@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS source_documents (
 CREATE TABLE IF NOT EXISTS formulations (
     id SERIAL PRIMARY KEY,
     source_document_id INTEGER REFERENCES source_documents(id) ON DELETE CASCADE,
+    formulation_uid VARCHAR(512) UNIQUE,       -- Deterministic: document_base_id#index (no DB lookup for embeddings)
     api_id INTEGER,                            -- Direct FK to apis for fast queries (set after api created)
     formulation_name VARCHAR(255),
     drug_name VARCHAR(255),
@@ -269,10 +270,11 @@ CREATE TABLE IF NOT EXISTS stability_results (
 -- ============================================================================
 
 -- 19. formulation_summary_embeddings: High-level formulation context
--- Replaces ChromaDB collection: formulation_summaries
+-- formulation_uid: deterministic link from embedding to formulation (no DB lookup on ingest)
 CREATE TABLE IF NOT EXISTS formulation_summary_embeddings (
     id SERIAL PRIMARY KEY,
-    formulation_id INTEGER REFERENCES formulations(id) ON DELETE CASCADE,
+    formulation_id INTEGER NULL REFERENCES formulations(id) ON DELETE CASCADE,
+    formulation_uid VARCHAR(512),             -- Deterministic: same as formulations.formulation_uid
     text_content TEXT NOT NULL,                -- Constructed text for embedding
     embedding vector(768),                     -- Vertex AI text-embedding-004
     metadata JSONB,
@@ -280,10 +282,10 @@ CREATE TABLE IF NOT EXISTS formulation_summary_embeddings (
 );
 
 -- 20. manufacturing_process_embeddings: Manufacturing process descriptions
--- Replaces ChromaDB collection: manufacturing_processes
 CREATE TABLE IF NOT EXISTS manufacturing_process_embeddings (
     id SERIAL PRIMARY KEY,
-    manufacturing_process_id INTEGER REFERENCES manufacturing_processes(id) ON DELETE CASCADE,
+    manufacturing_process_id INTEGER NULL REFERENCES manufacturing_processes(id) ON DELETE CASCADE,
+    formulation_uid VARCHAR(512),             -- Link to formulation for RAG (deterministic)
     text_content TEXT NOT NULL,
     embedding vector(768),                     -- Vertex AI text-embedding-004
     metadata JSONB,
@@ -291,10 +293,10 @@ CREATE TABLE IF NOT EXISTS manufacturing_process_embeddings (
 );
 
 -- 21. particle_analytics_embeddings: Particle characteristics and analytical results
--- Replaces ChromaDB collection: particle_and_analytics
 CREATE TABLE IF NOT EXISTS particle_analytics_embeddings (
     id SERIAL PRIMARY KEY,
-    formulation_id INTEGER REFERENCES formulations(id) ON DELETE CASCADE,
+    formulation_id INTEGER NULL REFERENCES formulations(id) ON DELETE CASCADE,
+    formulation_uid VARCHAR(512),             -- Deterministic: same as formulations.formulation_uid
     text_content TEXT NOT NULL,
     embedding vector(768),                     -- Vertex AI text-embedding-004
     metadata JSONB,
@@ -302,10 +304,10 @@ CREATE TABLE IF NOT EXISTS particle_analytics_embeddings (
 );
 
 -- 22. in_vitro_embeddings: Dissolution profiles and in vitro performance
--- Replaces ChromaDB collection: in_vitro_performance
 CREATE TABLE IF NOT EXISTS in_vitro_embeddings (
     id SERIAL PRIMARY KEY,
-    dissolution_profile_id INTEGER REFERENCES dissolution_profiles(id) ON DELETE CASCADE,
+    dissolution_profile_id INTEGER NULL REFERENCES dissolution_profiles(id) ON DELETE CASCADE,
+    formulation_uid VARCHAR(512),             -- Link to formulation for RAG (deterministic)
     text_content TEXT NOT NULL,
     embedding vector(768),                     -- Vertex AI text-embedding-004
     metadata JSONB,
@@ -313,10 +315,10 @@ CREATE TABLE IF NOT EXISTS in_vitro_embeddings (
 );
 
 -- 23. in_vivo_embeddings: PK studies and bioequivalence results
--- Replaces ChromaDB collection: in_vivo_performance
 CREATE TABLE IF NOT EXISTS in_vivo_embeddings (
     id SERIAL PRIMARY KEY,
-    pk_study_id INTEGER REFERENCES pk_studies(id) ON DELETE CASCADE,
+    pk_study_id INTEGER NULL REFERENCES pk_studies(id) ON DELETE CASCADE,
+    formulation_uid VARCHAR(512),             -- Link to formulation for RAG (deterministic)
     text_content TEXT NOT NULL,
     embedding vector(768),                     -- Vertex AI text-embedding-004
     metadata JSONB,

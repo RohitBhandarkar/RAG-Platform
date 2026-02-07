@@ -61,6 +61,7 @@ class CanonicalEmbeddingRequest(BaseModel):
 	"""Request body for ingesting embeddings from canonical JSON."""
 	canonical_json: dict
 	source_document_id: int | None = None
+	source_id: str | None = None  # Optional; when set, formulation_uid matches DB ingest (e.g. filename, PMID)
 
 
 class TextEmbeddingRequest(BaseModel):
@@ -323,6 +324,7 @@ def embedding_ingest_canonical(body: CanonicalEmbeddingRequest):
 		results = ingestion_service.ingest_from_canonical(
 			canonical=body.canonical_json,
 			source_document_id=body.source_document_id,
+			source_id=body.source_id,
 		)
 		
 		total_embedded = sum(

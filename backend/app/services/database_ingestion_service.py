@@ -12,6 +12,7 @@ from datetime import datetime
 from sqlalchemy import text
 
 from app.db import engine
+from app.utils.formulation_uid import formulation_uid_from_canonical
 
 
 logger = logging.getLogger(__name__)
@@ -66,15 +67,19 @@ class DatabaseIngestionService:
                 )
                 stats["source_document_id"] = source_doc_id
                 
-                # 2. Process each formulation
+                # 2. Process each formulation (deterministic formulation_uid: no DB lookup for embeddings)
                 formulations = canonical.get("formulations", [])
                 for idx, formulation in enumerate(formulations):
                     try:
+                        formulation_uid = formulation_uid_from_canonical(
+                            document, idx, source_id=source_id
+                        )
                         form_result = self._process_formulation(
-                            conn, 
-                            formulation, 
-                            source_doc_id, 
-                            idx
+                            conn,
+                            formulation,
+                            source_doc_id,
+                            idx,
+                            formulation_uid=formulation_uid,
                         )
                         stats["formulations_created"] += 1
                         stats["excipients_created"] += form_result.get("excipients", 0)
@@ -157,6 +162,7 @@ class DatabaseIngestionService:
         formulation: Dict[str, Any],
         source_doc_id: int,
         idx: int,
+        formulation_uid: str,
     ) -> Dict[str, int]:
         """Process a single formulation and its related data."""
         
@@ -183,16 +189,17 @@ class DatabaseIngestionService:
         if drug.get("name"):
             api_id = self._get_or_create_api(conn, drug)
         
-        # Insert formulation with api_id, bcs_class, formulation_type
+        # Insert formulation with formulation_uid (deterministic; embeddings use same UID, no DB lookup)
         form_result = conn.execute(
             text("""
                 INSERT INTO formulations 
-                (source_document_id, api_id, formulation_name, drug_name, dosage_form, formulation_type, bcs_class, metadata)
-                VALUES (:source_doc_id, :api_id, :name, :drug_name, :dosage_form, :formulation_type, :bcs_class, CAST(:metadata AS jsonb))
+                (source_document_id, formulation_uid, api_id, formulation_name, drug_name, dosage_form, formulation_type, bcs_class, metadata)
+                VALUES (:source_doc_id, :formulation_uid, :api_id, :name, :drug_name, :dosage_form, :formulation_type, :bcs_class, CAST(:metadata AS jsonb))
                 RETURNING id
             """),
             {
                 "source_doc_id": source_doc_id,
+                "formulation_uid": formulation_uid,
                 "api_id": api_id,
                 "name": formulation_name,
                 "drug_name": drug_name,

@@ -12,6 +12,7 @@ import requests
 
 from app.config import settings
 from app.db import engine
+from app.utils.formulation_uid import formulation_uid_from_canonical
 from sqlalchemy import text
 
 
@@ -449,13 +450,22 @@ class EmbeddingIngestionService:
         
         return ". ".join(parts) if parts else "Pharmacokinetic data"
     
-    def ingest_from_canonical(self, canonical: dict, source_document_id: int = None) -> dict:
+    def ingest_from_canonical(
+        self,
+        canonical: dict,
+        source_document_id: int = None,
+        source_id: str = None,
+    ) -> dict:
         """
         Generate and store embeddings for all data in a canonical JSON.
+
+        Uses deterministic formulation_uid (document + index) so no DB lookup
+        is needed; same UID as DatabaseIngestionService.
         
         Args:
             canonical: The canonical JSON dict with document, api, formulations, metadata
             source_document_id: Optional ID linking to source_documents table
+            source_id: Optional external id (filename, etc.) so UID matches DB ingest when provided
             
         Returns:
             dict: Statistics for each embedding type
@@ -473,6 +483,7 @@ class EmbeddingIngestionService:
         doc_title = document.get("title", "Unknown document")
         
         for idx, formulation in enumerate(formulations):
+            formulation_uid = formulation_uid_from_canonical(document, idx, source_id=source_id)
             form_id = formulation.get("formulation_id", f"form_{idx}")
             
             # Build enriched metadata for RAG filtering
@@ -493,8 +504,9 @@ class EmbeddingIngestionService:
                             key = f"dissolution_{r['time_point']}min"
                             dissolution_metrics[key] = r["percent_released"]
             
-            # Enriched metadata for all embeddings
+            # Enriched metadata for all embeddings (include formulation_uid for RAG)
             enriched_metadata = {
+                "formulation_uid": formulation_uid,
                 "formulation_id": form_id,
                 "formulation_name": formulation.get("name", ""),
                 "document": doc_title,
@@ -520,6 +532,7 @@ class EmbeddingIngestionService:
                         text_content=text_content,
                         embedding=embedding,
                         metadata=enriched_metadata,
+                        formulation_uid=formulation_uid,
                         source_document_id=source_document_id,
                     )
                     stats["formulation_summary"]["embedded"] += 1
@@ -538,6 +551,7 @@ class EmbeddingIngestionService:
                         text_content=text_content,
                         embedding=embedding,
                         metadata=enriched_metadata,
+                        formulation_uid=formulation_uid,
                         source_document_id=source_document_id,
                     )
                     stats["manufacturing_process"]["embedded"] += 1
@@ -556,6 +570,7 @@ class EmbeddingIngestionService:
                         text_content=text_content,
                         embedding=embedding,
                         metadata=enriched_metadata,
+                        formulation_uid=formulation_uid,
                         source_document_id=source_document_id,
                     )
                     stats["particle_analytics"]["embedded"] += 1
@@ -574,6 +589,7 @@ class EmbeddingIngestionService:
                         text_content=text_content,
                         embedding=embedding,
                         metadata=enriched_metadata,
+                        formulation_uid=formulation_uid,
                         source_document_id=source_document_id,
                     )
                     stats["in_vitro"]["embedded"] += 1
@@ -592,6 +608,7 @@ class EmbeddingIngestionService:
                         text_content=text_content,
                         embedding=embedding,
                         metadata=enriched_metadata,
+                        formulation_uid=formulation_uid,
                         source_document_id=source_document_id,
                     )
                     stats["in_vivo"]["embedded"] += 1
@@ -608,24 +625,24 @@ class EmbeddingIngestionService:
         text_content: str,
         embedding: list[float],
         metadata: dict,
+        formulation_uid: str,
         source_document_id: int = None,
     ):
-        """Store an embedding in the appropriate table."""
+        """Store an embedding with formulation_uid (deterministic; no DB lookup for formulation_id)."""
         import json
         
         with engine.connect() as conn:
-            # Use a generic insert that works for all embedding tables
-            # The foreign key columns vary by table, so we store references in metadata
             if source_document_id:
                 metadata["source_document_id"] = source_document_id
             
             insert_query = text(f"""
                 INSERT INTO {table} 
-                (text_content, embedding, metadata)
-                VALUES (:text, CAST(:emb AS vector), CAST(:meta AS jsonb))
+                (formulation_uid, text_content, embedding, metadata)
+                VALUES (:formulation_uid, :text, CAST(:emb AS vector), CAST(:meta AS jsonb))
             """)
             
             conn.execute(insert_query, {
+                "formulation_uid": formulation_uid,
                 "text": text_content,
                 "emb": f"[{','.join(str(x) for x in embedding)}]",
                 "meta": json.dumps(metadata),
