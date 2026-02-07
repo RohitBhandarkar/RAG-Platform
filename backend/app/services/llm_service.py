@@ -336,6 +336,55 @@ REMINDER: Output ONLY the complete, valid JSON object. Ensure ALL brackets are p
 			logger.error(f"Response JSON: {json.dumps(obj, indent=2)[:1000]}...")
 			raise RuntimeError("Unexpected response format from Vertex AI") from exc
 
+	def _call_vertex_gemini_text(self, prompt: str) -> str:
+		"""Call Vertex AI Gemini for plain text (e.g. markdown). No responseMimeType so output is not forced to JSON."""
+		project = settings.GOOGLE_CLOUD_PROJECT
+		location = settings.VERTEX_LOCATION or "us-central1"
+		if not project:
+			raise RuntimeError("GOOGLE_CLOUD_PROJECT must be set to use Vertex AI")
+		model = self.model or "gemini-2.0-flash"
+		url = (
+			f"https://{location}-aiplatform.googleapis.com/v1/projects/{project}"
+			f"/locations/{location}/publishers/google/models/{model}:generateContent"
+		)
+		credentials, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+		credentials.refresh(GoogleAuthRequest())
+		payload = {
+			"contents": [{"role": "user", "parts": [{"text": prompt}]}],
+			"generationConfig": {
+				"temperature": 0.2,
+				"maxOutputTokens": 8192,
+			},
+		}
+		resp = requests.post(
+			url,
+			headers={"Authorization": f"Bearer {credentials.token}", "Content-Type": "application/json"},
+			json=payload,
+			timeout=300,
+		)
+		if resp.status_code >= 400:
+			raise RuntimeError(f"Vertex AI error {resp.status_code}: {resp.text}")
+		obj = resp.json()
+		return obj["candidates"][0]["content"]["parts"][0]["text"]
+
+	def generate_text(self, prompt: str) -> str:
+		"""Generate plain text (e.g. markdown) using the configured LLM. For Vertex AI, uses Gemini without JSON mode."""
+		if self.base_url == "vertex":
+			return self._call_vertex_gemini_text(prompt)
+		# Fallback: OpenAI-compatible chat
+		url = f"{self.base_url}/chat/completions"
+		payload = {
+			"model": self.model,
+			"messages": [{"role": "user", "content": prompt}],
+			"temperature": 0.2,
+			"max_tokens": 8192,
+		}
+		data = json.dumps(payload).encode("utf-8")
+		req = request.Request(url, data=data, headers={"Content-Type": "application/json"})
+		with request.urlopen(req, timeout=300) as resp:
+			body = json.loads(resp.read().decode("utf-8"))
+		return body["choices"][0]["message"]["content"]
+
 	def check_health(self) -> Dict[str, Any]:
 		"""Lightweight health check against the LLM endpoint.
 
