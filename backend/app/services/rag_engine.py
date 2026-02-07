@@ -1,11 +1,13 @@
 """RAG engine: retrieve context, generate markdown report via Vertex AI, convert to PDF."""
 
+import html
 import logging
+from html.parser import HTMLParser
 from io import BytesIO
 from typing import Any, Dict, List, Tuple
 
 import markdown
-from xhtml2pdf import pisa
+from fpdf import FPDF
 
 from app.db import vector_search, get_formulation_context_by_uids
 from app.services.embedding_service import EmbeddingService
@@ -114,32 +116,98 @@ Output ONLY valid Markdown. No preamble or meta-commentary."""
 
 
 def markdown_to_pdf(md_content: str) -> bytes:
-    """Convert markdown string to PDF bytes (pure Python, no system libs)."""
+    """Convert markdown string to PDF bytes using fpdf2 (pure Python, no system libs)."""
     html_body = markdown.markdown(
         md_content,
         extensions=["extra", "nl2br"],
     )
-    html_doc = f"""<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<style>
-body {{ font-family: Helvetica, Arial, sans-serif; margin: 2cm; line-height: 1.5; color: #333; }}
-h1 {{ font-size: 1.5em; border-bottom: 2px solid #333; padding-bottom: 0.3em; }}
-h2 {{ font-size: 1.2em; margin-top: 1.2em; }}
-h3 {{ font-size: 1.05em; margin-top: 0.8em; }}
-ul, ol {{ margin: 0.5em 0; }}
-li {{ margin: 0.25em 0; }}
-strong {{ font-weight: 600; }}
-</style>
-</head>
-<body>
-{html_body}
-</body>
-</html>"""
-    buf = BytesIO()
-    pisa.CreatePDF(html_doc, dest=buf, encoding="utf-8")
-    return buf.getvalue()
+    return _html_to_pdf(html_body)
+
+
+def _html_to_pdf(html_fragment: str) -> bytes:
+    """Render HTML fragment (from markdown) to PDF using fpdf2 (pure Python, no system deps)."""
+    # Normalize: wrap in a div so we have one root if fragment is multiple roots
+    normalized = f"<div>{html_fragment}</div>" if not html_fragment.strip().startswith("<") else html_fragment
+    parser = _HtmlToFpdfParser()
+    parser.feed(normalized)
+
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+    pdf.set_margins(20, 20, 20)
+    pdf.set_auto_page_break(auto=True, margin=20)
+    pdf.set_font("Helvetica", size=11)
+
+    for item in parser.elements:
+        kind = item["kind"]
+        text = item.get("text", "").strip()
+        if kind == "h1":
+            pdf.set_font("Helvetica", "B", 16)
+            pdf.ln(4)
+            pdf.multi_cell(0, 8, text)
+            pdf.ln(2)
+            pdf.set_font("Helvetica", "", 11)
+        elif kind == "h2":
+            pdf.set_font("Helvetica", "B", 14)
+            pdf.ln(4)
+            pdf.multi_cell(0, 7, text)
+            pdf.ln(2)
+            pdf.set_font("Helvetica", "", 11)
+        elif kind == "h3":
+            pdf.set_font("Helvetica", "B", 12)
+            pdf.ln(3)
+            pdf.multi_cell(0, 6, text)
+            pdf.ln(1)
+            pdf.set_font("Helvetica", "", 11)
+        elif kind == "p":
+            pdf.ln(2)
+            pdf.multi_cell(0, 6, html.unescape(text))
+            pdf.ln(1)
+        elif kind == "li":
+            pdf.set_font("Helvetica", "", 11)
+            pdf.multi_cell(0, 6, html.unescape("  \u2022 " + text))
+            pdf.ln(1)
+        elif kind == "br":
+            pdf.ln(4)
+
+    out = pdf.output(dest="S")
+    return out.encode("latin-1") if isinstance(out, str) else out
+
+
+class _HtmlToFpdfParser(HTMLParser):
+    """Collect block elements and text for PDF rendering."""
+
+    BLOCK_TAGS = {"h1", "h2", "h3", "p", "li", "br"}
+    HEADING_TAGS = {"h1", "h2", "h3"}
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.elements: List[Dict[str, Any]] = []
+        self._current: Dict[str, Any] = {}
+        self._stack: List[str] = []
+        self._text: List[str] = []
+
+    def handle_starttag(self, tag: str, attrs: List[Tuple[str, str | None]]) -> None:
+        self._stack.append(tag)
+        if tag in self.BLOCK_TAGS:
+            self._current = {"kind": tag, "text": ""}
+            self._text = []
+
+    def handle_endtag(self, tag: str) -> None:
+        if self._stack and self._stack[-1] == tag:
+            self._stack.pop()
+        if tag in self.BLOCK_TAGS and self._current.get("kind") == tag:
+            text = "".join(self._text).strip()
+            self._current["text"] = text
+            self.elements.append(dict(self._current))
+            self._current = {}
+            self._text = []
+
+    def handle_data(self, data: str) -> None:
+        if self._current:
+            self._text.append(data)
+        elif self._stack and self._stack[-1] in self.BLOCK_TAGS:
+            self._text.append(data)
 
 
 def generate_report(
