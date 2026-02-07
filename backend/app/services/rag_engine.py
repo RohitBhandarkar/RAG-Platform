@@ -19,12 +19,9 @@ from app.services.llm_service import LLMService
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Confidence strategy: per-excipient confidence is derived from retrieved
-# formulation_details only. For each excipient we count (1) how many
-# formulations list it and (2) whether any of those list an amount.
-# - High:  in >=2 formulations AND at least one lists an amount.
-# - Medium: in >=2 formulations (any amount), OR in 1 formulation with amount.
-# - Low:   in exactly 1 formulation and no amount specified.
+# Confidence: numeric score (0-1) from formulation count, has_amount, and
+# pgvector similarity. Tiers: High >= 0.66, Medium 0.33-0.66, Low < 0.33.
+# Formula: 0.35 * count_factor + 0.15 * has_amount + 0.5 * avg_similarity.
 # ---------------------------------------------------------------------------
 
 
@@ -37,15 +34,25 @@ def _normalize_excipient_name(name: str) -> str:
 
 def _compute_excipient_confidence(
     formulation_details: List[Dict[str, Any]],
+    nearest_embeddings: List[Dict[str, Any]],
 ) -> Dict[str, Dict[str, Any]]:
     """
-    Compute confidence per excipient from retrieved formulations.
-    Returns dict: normalized_name -> { display_name, formulation_count, has_amount, confidence }.
+    Compute numeric confidence (0-1) and tier per excipient from retrieved
+    formulations and vector similarities. Returns dict: normalized_name ->
+    { display_name, formulation_count, has_amount, confidence, confidence_score }.
     """
-    # aggregated by normalized name: { count, has_amount, display_name }
+    # uid -> similarity (from pgvector); preserve order for rank if needed
+    uid_to_similarity: Dict[str, float] = {}
+    for i, row in enumerate(nearest_embeddings or []):
+        uid = row.get("formulation_uid") or (row.get("metadata") or {}).get("formulation_uid")
+        if uid is not None:
+            uid_to_similarity[uid] = float(row.get("similarity") or 0.0)
+
+    # aggregated by normalized name: count, has_amount, display_name, list of similarities
     agg: Dict[str, Dict[str, Any]] = {}
-    n_forms = len(formulation_details) or 1
     for form in formulation_details or []:
+        uid = form.get("formulation_uid")
+        sim = uid_to_similarity.get(uid, 0.0) if uid else 0.0
         for e in form.get("excipients") or []:
             name = (e.get("name") or "").strip()
             if not name:
@@ -54,18 +61,34 @@ def _compute_excipient_confidence(
             if not key:
                 continue
             if key not in agg:
-                agg[key] = {"display_name": name, "formulation_count": 0, "has_amount": False}
+                agg[key] = {
+                    "display_name": name,
+                    "formulation_count": 0,
+                    "has_amount": False,
+                    "similarities": [],
+                }
             agg[key]["formulation_count"] += 1
+            agg[key]["similarities"].append(sim)
             if e.get("amount") is not None:
                 agg[key]["has_amount"] = True
-    # assign confidence tier
+
+    k = max(len(nearest_embeddings), 1)
     result: Dict[str, Dict[str, Any]] = {}
     for key, v in agg.items():
         count = v["formulation_count"]
         has_amount = v["has_amount"]
-        if count >= 2 and has_amount:
+        sims = v.get("similarities") or [0.0]
+        avg_sim = sum(sims) / len(sims) if sims else 0.0
+        count_factor = min(count / 3.0, 1.0)
+        score = (
+            0.35 * count_factor
+            + 0.15 * (1.0 if has_amount else 0.0)
+            + 0.5 * avg_sim
+        )
+        score = max(0.0, min(1.0, score))
+        if score >= 0.66:
             tier = "High"
-        elif count >= 2 or (count == 1 and has_amount):
+        elif score >= 0.33:
             tier = "Medium"
         else:
             tier = "Low"
@@ -74,6 +97,7 @@ def _compute_excipient_confidence(
             "formulation_count": count,
             "has_amount": has_amount,
             "confidence": tier,
+            "confidence_score": round(score, 2),
         }
     return result
 
@@ -158,8 +182,8 @@ def _build_report_prompt(
     for i, row in enumerate(nearest_embeddings[:10], 1):
         context_parts.append(f"[{i}] {row.get('text_content', '')[:800]}")
 
-    # Excipient confidence (from formulation count + amount presence)
-    confidence_map = _compute_excipient_confidence(formulation_details)
+    # Excipient confidence: numeric score (0-1) + tier (High/Medium/Low)
+    confidence_map = _compute_excipient_confidence(formulation_details, nearest_embeddings)
     context_parts.append("\n## Excipient metadata (include in report for each excipient)\n")
     if not confidence_map:
         context_parts.append("(No excipients in retrieved formulations.)")
@@ -167,7 +191,8 @@ def _build_report_prompt(
         for key, meta in confidence_map.items():
             display = meta.get("display_name", key)
             conf = meta.get("confidence", "Low")
-            context_parts.append(f"- **{display}**: Confidence = {conf}")
+            score = meta.get("confidence_score", 0.0)
+            context_parts.append(f"- **{display}**: Confidence = {conf} ({score})")
 
     context_str = "\n\n".join(context_parts)
 
@@ -179,9 +204,7 @@ Your report must include the following sections (use only information from the c
 
 1. **Title** – e.g. "Formulation Experiment Report" and a one-line summary of the input API properties.
 2. **Input API summary** – Brief summary of the queried properties (molecular weight, BCS class, etc.).
-3. **Recommended excipients** – For each excipient suggested by the retrieved formulations:
-   - Name and **amount** only if it appears in the context (e.g. "X mg", "% w/w"); otherwise write "amount not specified in source".
-   - **Confidence**: Use exactly the value from "Excipient metadata" (High / Medium / Low) for that excipient.
+3. **Recommended excipients** – List each excipient BY NAME (from "Retrieved formulation context"), with its amount when present, then the confidence for that excipient (from "Excipient metadata"). Format each line as: **Excipient Name**: amount or "amount not specified in source" — Confidence: High/Medium/Low (numeric score). Example: **HPMC E3**: 0.98 mg/mL — Confidence: Medium (0.72). You must include both the tier (High/Medium/Low) and the numeric score in parentheses. You may group by role (e.g. Stabilizers, Polymer carriers) as in the context. Do NOT list confidence alone; every bullet must include excipient name, then amount, then confidence with score.
 4. **Experiments to conduct** – Based on the retrieved context, list what experiments can be performed to test these formulations (e.g. dissolution, stability, particle size, bioavailability). Only include experiments that are mentioned or clearly implied in the provided context.
 5. **Source summary** – One short paragraph noting that recommendations are based on retrieved literature/formulation data.
 
