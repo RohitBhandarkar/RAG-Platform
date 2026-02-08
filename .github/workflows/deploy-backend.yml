@@ -54,7 +54,79 @@ jobs:
         run: |
           docker push ${{ env.ARTIFACT_REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/rag-backend/${{ env.IMAGE_NAME }}:${{ github.sha }}
           docker push ${{ env.ARTIFACT_REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/rag-backend/${{ env.IMAGE_NAME }}:latest
-      
+
+      - name: Copy scripts to VM
+        run: |
+          gcloud compute scp --recurse scripts ${{ env.GCP_VM_NAME }}:/tmp/rag-scripts \
+            --zone=${{ secrets.GCP_VM_ZONE }} \
+            --tunnel-through-iap
+
+      - name: Ensure PostgreSQL and pgweb on VM
+        run: |
+          gcloud compute ssh ${{ env.GCP_VM_NAME }} \
+            --zone=${{ secrets.GCP_VM_ZONE }} \
+            --tunnel-through-iap \
+            --command="
+              set -e
+              POSTGRES_PASSWORD=postgres
+              POSTGRES_DB=formulation_rag
+              POSTGRES_DATA_DIR=/data/postgres
+
+              echo '=== Checking if PostgreSQL is running ==='
+              if sudo docker ps --filter name=rag-postgres --filter status=running -q | grep -q .; then
+                echo 'PostgreSQL container (rag-postgres) already running. Skipping.'
+              else
+                echo 'PostgreSQL not running. Starting...'
+                sudo mkdir -p \$POSTGRES_DATA_DIR
+                sudo chmod 777 \$POSTGRES_DATA_DIR 2>/dev/null || true
+                sudo docker stop rag-postgres 2>/dev/null || true
+                sudo docker rm rag-postgres 2>/dev/null || true
+                sudo docker pull pgvector/pgvector:pg16
+                sudo docker run -d \
+                  --name rag-postgres \
+                  --restart unless-stopped \
+                  --network host \
+                  -e POSTGRES_USER=postgres \
+                  -e POSTGRES_PASSWORD=\$POSTGRES_PASSWORD \
+                  -e POSTGRES_DB=\$POSTGRES_DB \
+                  -v \$POSTGRES_DATA_DIR:/var/lib/postgresql/data \
+                  pgvector/pgvector:pg16
+                echo 'Waiting for PostgreSQL to be ready...'
+                for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
+                  if sudo docker exec rag-postgres pg_isready -U postgres > /dev/null 2>&1; then
+                    echo 'PostgreSQL is ready.'
+                    break
+                  fi
+                  echo \"Waiting... (\$i/30)\"
+                  sleep 2
+                done
+                echo 'Running init_db.sql...'
+                sudo docker exec -i rag-postgres psql -U postgres -d \$POSTGRES_DB < /tmp/rag-scripts/init_db.sql
+                echo 'Running migrate_add_formulation_uid.sql...'
+                sudo docker exec -i rag-postgres psql -U postgres -d \$POSTGRES_DB < /tmp/rag-scripts/migrate_add_formulation_uid.sql || true
+                echo 'PostgreSQL setup complete.'
+              fi
+
+              echo '=== Checking if pgweb is running ==='
+              if sudo docker ps --filter name=rag-pgweb --filter status=running -q | grep -q .; then
+                echo 'pgweb container (rag-pgweb) already running. Skipping.'
+              else
+                echo 'pgweb not running. Starting...'
+                sudo docker stop rag-pgweb 2>/dev/null || true
+                sudo docker rm rag-pgweb 2>/dev/null || true
+                sudo docker pull sosedoff/pgweb
+                sudo docker run -d \
+                  --name rag-pgweb \
+                  --restart unless-stopped \
+                  --network host \
+                  -e DATABASE_URL=postgres://postgres:postgres@localhost:5432/formulation_rag?sslmode=disable \
+                  -e HTTP_PORT=8081 \
+                  sosedoff/pgweb
+                echo 'pgweb started (HTTP on port 8081).'
+              fi
+
+              echo '=== PostgreSQL and pgweb check complete ==='
+            "
       
       - name: Deploy to GCP VM
         run: |
