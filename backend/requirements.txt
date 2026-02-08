@@ -4,9 +4,11 @@ pydantic==2.5.3
 pydantic-settings==2.1.0
 sqlalchemy==2.0.25
 psycopg2-binary==2.9.9
-chromadb==0.5.23
+pgvector==0.3.6
 pytest==7.4.4
 pypdf>=3.0.0,<5.0.0
 python-multipart>=0.0.20,<0.1.0
 google-auth>=2.30.0
 requests>=2.32.0
+markdown>=3.5.0
+reportlab>=4.0.0

@@ -3,7 +3,7 @@ name: Deploy Backend to GCP (Strat-1)
 on:
   push:
     branches:
-      - release/strat-1
+      - feature/**
     paths:
       - 'backend/**'
       - 'scripts/**'
@@ -91,6 +91,11 @@ jobs:
                 -e GOOGLE_CLOUD_PROJECT=${{ secrets.GCP_PROJECT_ID }} \
                 -e VERTEX_LOCATION=${{ env.GCP_REGION }} \
                 -e GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }} \
+                -e POSTGRES_HOST=localhost \
+                -e POSTGRES_PORT=5432 \
+                -e POSTGRES_DB=formulation_rag \
+                -e POSTGRES_USER=postgres \
+                -e POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }} \
                 ${{ env.ARTIFACT_REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/rag-backend/${{ env.IMAGE_NAME }}:${{ github.sha }}
 
               echo '=== Running create_document_store.sh inside container ==='
@@ -112,13 +117,17 @@ jobs:
             --zone=${{ secrets.GCP_VM_ZONE }} \
             --tunnel-through-iap \
             --command="
-              echo '=== Checking backend health endpoint ==='
-              curl -f http://localhost:8080/health || exit 1
-              echo ''
-              curl -f http://localhost:8080/health/storage || exit 1
-              echo ''
               echo '=== Checking LLM health endpoint ==='
               curl -f http://localhost:8080/health/llm || exit 1
+              echo ''
+              echo '=== Checking database health endpoint ==='
+              curl -s http://localhost:8080/health/database | jq .
+              echo ''
+              echo '=== Checking combined health endpoint ==='
+              curl -s http://localhost:8080/health/all | jq .
+              echo ''
+              echo '=== Checking embeddings health endpoint ==='
+              curl -s http://localhost:8080/health/embeddings | jq .
               echo ''
               echo '=== Deployment successful ==='
             "

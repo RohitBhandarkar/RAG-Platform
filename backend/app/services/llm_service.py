@@ -152,8 +152,16 @@ related formulations discussed in the paper.
 SCHEMA (example structure; follow these keys and nesting exactly):
 {self._canonical_schema_str}
 
-RULES:
-- Output EXACTLY ONE JSON object with the structure shown in the schema above.
+OUTPUT FORMAT REQUIREMENTS:
+1. Return EXACTLY ONE valid, complete JSON object.
+2. The JSON MUST be syntactically valid and fully parseable.
+3. All brackets {{ }} and [ ] MUST be properly opened and closed.
+4. All strings MUST be properly quoted and terminated.
+5. NO trailing commas after the last item in arrays or objects.
+6. DO NOT truncate - you MUST complete the entire JSON structure.
+7. Begin your response with {{ and end with }}.
+
+CONTENT RULES:
 - If multiple formulations exist, include them in the formulations array within the SINGLE JSON object.
 - DO NOT output multiple separate JSON objects.
 - DO NOT add any text, explanations, or comments before or after the JSON.
@@ -169,7 +177,11 @@ RULES:
   qualitative trends. You MUST NOT assume or guess values from images
   that are not described in text.
 
-CRITICAL: Return ONLY the JSON object. No additional text or objects.
+BREVITY GUIDELINES (to ensure complete output):
+- Keep string values concise - summarize key points rather than quoting verbatim.
+- Limit free-text fields (notes, observations, descriptions) to 1-2 sentences maximum.
+- Focus on extracting key numeric values and structured data.
+- Omit redundant or repetitive information across formulations.
 
 DOCUMENT CONTEXT:
 - Source: {source}
@@ -190,7 +202,7 @@ RELEVANT SECTIONS:
 TABLES (in markdown form):
 {tables_md}
 
-Now return ONLY the filled JSON object, with no explanation or prose.
+REMINDER: Output ONLY the complete, valid JSON object. Ensure ALL brackets are properly closed.
 """
 
 		return instructions
@@ -285,12 +297,12 @@ Now return ONLY the filled JSON object, with no explanation or prose.
 			],
 			"generationConfig": {
 				"temperature": 0.0,
-				"maxOutputTokens": 16384,
+				"maxOutputTokens": 32768,
 				"responseMimeType": "application/json",
 			},
 		}
 		
-		logger.debug(f"Request payload config: temperature=0.0, maxOutputTokens=16384, responseMimeType=application/json")
+		logger.debug(f"Request payload config: temperature=0.0, maxOutputTokens=32768, responseMimeType=application/json")
 		logger.debug(f"Prompt length: {len(prompt)} chars")
 
 		logger.info("Sending request to Vertex AI")
@@ -323,6 +335,55 @@ Now return ONLY the filled JSON object, with no explanation or prose.
 			logger.error(f"Failed to parse Vertex AI response structure: {exc}")
 			logger.error(f"Response JSON: {json.dumps(obj, indent=2)[:1000]}...")
 			raise RuntimeError("Unexpected response format from Vertex AI") from exc
+
+	def _call_vertex_gemini_text(self, prompt: str) -> str:
+		"""Call Vertex AI Gemini for plain text (e.g. markdown). No responseMimeType so output is not forced to JSON."""
+		project = settings.GOOGLE_CLOUD_PROJECT
+		location = settings.VERTEX_LOCATION or "us-central1"
+		if not project:
+			raise RuntimeError("GOOGLE_CLOUD_PROJECT must be set to use Vertex AI")
+		model = self.model or "gemini-2.0-flash"
+		url = (
+			f"https://{location}-aiplatform.googleapis.com/v1/projects/{project}"
+			f"/locations/{location}/publishers/google/models/{model}:generateContent"
+		)
+		credentials, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+		credentials.refresh(GoogleAuthRequest())
+		payload = {
+			"contents": [{"role": "user", "parts": [{"text": prompt}]}],
+			"generationConfig": {
+				"temperature": 0.2,
+				"maxOutputTokens": 8192,
+			},
+		}
+		resp = requests.post(
+			url,
+			headers={"Authorization": f"Bearer {credentials.token}", "Content-Type": "application/json"},
+			json=payload,
+			timeout=300,
+		)
+		if resp.status_code >= 400:
+			raise RuntimeError(f"Vertex AI error {resp.status_code}: {resp.text}")
+		obj = resp.json()
+		return obj["candidates"][0]["content"]["parts"][0]["text"]
+
+	def generate_text(self, prompt: str) -> str:
+		"""Generate plain text (e.g. markdown) using the configured LLM. For Vertex AI, uses Gemini without JSON mode."""
+		if self.base_url == "vertex":
+			return self._call_vertex_gemini_text(prompt)
+		# Fallback: OpenAI-compatible chat
+		url = f"{self.base_url}/chat/completions"
+		payload = {
+			"model": self.model,
+			"messages": [{"role": "user", "content": prompt}],
+			"temperature": 0.2,
+			"max_tokens": 8192,
+		}
+		data = json.dumps(payload).encode("utf-8")
+		req = request.Request(url, data=data, headers={"Content-Type": "application/json"})
+		with request.urlopen(req, timeout=300) as resp:
+			body = json.loads(resp.read().decode("utf-8"))
+		return body["choices"][0]["message"]["content"]
 
 	def check_health(self) -> Dict[str, Any]:
 		"""Lightweight health check against the LLM endpoint.
