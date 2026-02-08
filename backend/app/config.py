@@ -26,9 +26,9 @@ class Settings(BaseSettings):
     POSTGRES_USER: str = Field("postgres")
     POSTGRES_PASSWORD: str = Field("postgres")
 
-    CHROMA_HOST: str = Field("localhost")
-    CHROMA_PORT: int = Field(8000)
-    USE_VERTEX_VECTOR_SEARCH: bool = Field(False)
+    # Embedding settings (Vertex AI text-embedding-004)
+    EMBEDDING_MODEL: str = Field("text-embedding-004")
+    EMBEDDING_DIMENSION: int = Field(768)
 
     class Config:
         env_file = ".env"

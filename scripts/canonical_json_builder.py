@@ -7,87 +7,162 @@ from pathlib import Path
 
 
 def get_canonical_schema():
-    # return {
-    #     "document": {
-    #         "title": "",
-    #         "authors": [],
-    #         "journal": "",
-    #         "year": None,
-    #         "doi": "",
-    #         "pmid": "",
-    #         "url": "",
-    #         "abstract_summary": "",
-    #         "document_type": "",
-    #         "ingestion_notes": ""
-    #     },
-    #     "api": {
-    #         "name": "",
-    #         "synonyms": [],
-    #         "molecular_weight": None,
-    #         "melting_point_c": None,
-    #         "glass_transition_temp_c": None,
-    #         "logp": None,
-    #         "logd": None,
-    #         "pka": None,
-    #         "bcs_class": "",
-    #         "aqueous_solubility": "",
-    #         "stability_sensitivities": [],
-    #         "dose_mg": None
-    #     },
-    #     "formulation_strategy": {
-    #         "strategy_name": "Nanocrystal",
-    #         "description": "",
-    #         "expected_benefits": [],
-    #         "constraints": []
-    #     },
-    #     "components": [
-    #         {
-    #             "name": "",
-    #             "role": "",
-    #             "amount": {
-    #                 "value": None,
-    #                 "unit": ""
-    #             }
-    #         }
-    #     ],
-    #     "process": {
-    #         "method": "",
-    #         "milling": {
-    #             "time_min": None,
-    #             "bead_size_mm": None,
-    #             "rpm": None
-    #         },
-    #         "solvent_system": "",
-    #         "temperature_c": None,
-    #         "mixing": "",
-    #         "notes": ""
-    #     },
-    #     "particle_characteristics": {
-    #         "particle_size_distribution_nm": "",
-    #         "zeta_potential_mv": None,
-    #         "dissolution_profile": ""
-    #     },
-    #     "stability": {
-    #         "conditions": "",
-    #         "duration_months": None,
-    #         "summary": ""
-    #     },
-    #     "pharmacokinetics": {
-    #         "relative_bioavailability": None,
-    #         "cmax": None,
-    #         "auc": None,
-    #         "tmax": None
-    #     },
-    #     "metadata": {
-    #         "formulation_type": "nanocrystal",
-    #         "data_source": "",
-    #         "confidence_level": "",
-    #         "curation_notes": "",
-    #         "created_at": datetime.now().isoformat()
-    #     }
-    # }
     return {
-
+        "document": {
+            "title": "",
+            "authors": [],
+            "journal": "",
+            "year": None,
+            "doi": "",
+            "pmid": "",
+            "url": "",
+            "abstract_summary": "",
+            "document_type": "",
+            "ingestion_notes": ""
+        },
+        "formulations": [
+            {
+                "name": "",
+                "drug": {
+                    "name": "",
+                    "solubility": "",
+                    "metadata": {
+                        "bcs_class": "",
+                        "molecular_weight": None,
+                        "logp": None,
+                        "pka": None
+                    }
+                },
+                "formulation_type": "",
+                "dosage_form": "",
+                "composition": {
+                    "active_ingredients": [
+                        {
+                            "name": "",
+                            "concentration": None,
+                            "unit": ""
+                        }
+                    ],
+                    "excipients": [
+                        {
+                            "name": "",
+                            "concentration": None,
+                            "unit": "",
+                            "role": ""
+                        }
+                    ]
+                },
+                "manufacturing": {
+                    "process_name": "",
+                    "process_parameters": {
+                        "equipment": "",
+                        "speed": None,
+                        "speed_unit": "",
+                        "duration": None,
+                        "duration_unit": "",
+                        "milling_media": "",
+                        "milling_media_size": None,
+                        "milling_media_size_unit": "",
+                        "inlet_temperature": None,
+                        "inlet_temperature_unit": "",
+                        "outlet_temperature": None,
+                        "outlet_temperature_unit": "",
+                        "feed_rate": None,
+                        "feed_rate_unit": "",
+                        "nozzle_diameter": None,
+                        "nozzle_diameter_unit": ""
+                    },
+                    "yield": None,
+                    "yield_unit": ""
+                },
+                "physical_properties": {
+                    "particle": {
+                        "particle_size": {
+                            "value": None,
+                            "unit": "nm",
+                            "std_dev": None,
+                            "method": ""
+                        },
+                        "polydispersity_index": {
+                            "value": None,
+                            "method": ""
+                        },
+                        "zeta_potential": {
+                            "value": None,
+                            "unit": "mV"
+                        }
+                    },
+                    "solid_state_properties": {
+                        "crystallinity": "",
+                        "thermal_analysis": "",
+                        "notes": ""
+                    },
+                    "drug_loading": {
+                        "value": None,
+                        "unit": ""
+                    },
+                    "stability": ""
+                },
+                "in_vitro_performance": [
+                    {
+                        "dissolution": {
+                            "medium": "",
+                            "conditions": {
+                                "apparatus": "",
+                                "volume": None,
+                                "volume_unit": "ml",
+                                "temperature": None,
+                                "temperature_unit": "°C",
+                                "rotation_speed": None,
+                                "rotation_speed_unit": "rpm"
+                            },
+                            "results": [
+                                {
+                                    "percent_released": None,
+                                    "time_point": None,
+                                    "time_unit": "min",
+                                    "qualitative": ""
+                                }
+                            ]
+                        }
+                    }
+                ],
+                "in_vivo_performance": {
+                    "animal_model": "",
+                    "dose": {
+                        "value": None,
+                        "unit": "mg"
+                    },
+                    "pharmacokinetics": {
+                        "parameters": {
+                            "Cmax": {
+                                "value": None,
+                                "unit": "",
+                                "std_dev": None
+                            },
+                            "Tmax": {
+                                "value": None,
+                                "unit": "h",
+                                "std_dev": None
+                            },
+                            "AUC": {
+                                "value": None,
+                                "unit": "",
+                                "std_dev": None,
+                                "interval": ""
+                            }
+                        }
+                    }
+                }
+            }
+        ],
+        "metadata": {
+            "formulation_type": "",
+            "data_source": "",
+            "confidence_level": "",
+            "curation_notes": "",
+            "created_at": ""
+        }
     }
 
 
