@@ -7,6 +7,7 @@ on:
     paths:
       - 'backend/**'
       - 'scripts/**'
+      - 'sql/feature/**'
       - '.github/workflows/deploy-backend.yml'
   workflow_dispatch:
 
@@ -55,9 +56,9 @@ jobs:
           docker push ${{ env.ARTIFACT_REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/rag-backend/${{ env.IMAGE_NAME }}:${{ github.sha }}
           docker push ${{ env.ARTIFACT_REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/rag-backend/${{ env.IMAGE_NAME }}:latest
 
-      - name: Copy scripts to VM
+      - name: Copy sql/feature to VM
         run: |
-          gcloud compute scp --recurse scripts ${{ env.GCP_VM_NAME }}:/tmp/rag-scripts \
+          gcloud compute scp --recurse sql/feature ${{ env.GCP_VM_NAME }}:/tmp/rag-scripts \
             --zone=${{ secrets.GCP_VM_ZONE }} \
             --tunnel-through-iap
 
@@ -74,7 +75,7 @@ jobs:
 
               echo '=== Checking if PostgreSQL is running ==='
               if sudo docker ps --filter name=rag-postgres --filter status=running -q | grep -q .; then
-                echo 'PostgreSQL container (rag-postgres) already running. Skipping.'
+                echo 'PostgreSQL container (rag-postgres) already running.'
               else
                 echo 'PostgreSQL not running. Starting...'
                 sudo mkdir -p \$POSTGRES_DATA_DIR
@@ -100,12 +101,19 @@ jobs:
                   echo \"Waiting... (\$i/30)\"
                   sleep 2
                 done
-                echo 'Running init_db.sql...'
-                sudo docker exec -i rag-postgres psql -U postgres -d \$POSTGRES_DB < /tmp/rag-scripts/init_db.sql
-                echo 'Running migrate_add_formulation_uid.sql...'
-                sudo docker exec -i rag-postgres psql -U postgres -d \$POSTGRES_DB < /tmp/rag-scripts/migrate_add_formulation_uid.sql || true
                 echo 'PostgreSQL setup complete.'
               fi
+
+              echo '=== Applying feature SQL scripts from /tmp/rag-scripts ==='
+              if [ -f /tmp/rag-scripts/init_db.sql ]; then
+                echo 'Running init_db.sql...'
+                sudo docker exec -i rag-postgres psql -U postgres -d \$POSTGRES_DB < /tmp/rag-scripts/init_db.sql
+              fi
+              for f in /tmp/rag-scripts/migrate_*.sql; do
+                [ -f \"\$f\" ] || continue
+                echo \"Running \$(basename \$f)...\"
+                sudo docker exec -i rag-postgres psql -U postgres -d \$POSTGRES_DB < \"\$f\" || true
+              done
 
               echo '=== Checking if pgweb is running ==='
               if sudo docker ps --filter name=rag-pgweb --filter status=running -q | grep -q .; then
