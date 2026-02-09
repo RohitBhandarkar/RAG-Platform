@@ -1,13 +1,21 @@
 """RAG context endpoint: user API input -> K nearest embeddings + formulation details."""
 
 import base64
+import uuid
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
-from app.db import vector_search, get_formulation_context_by_uids
+from app.db import (
+    vector_search,
+    get_formulation_context_by_uids,
+    create_internal_experiment_stub,
+    get_internal_experiment_by_report_id,
+    update_internal_experiment_from_lab,
+    insert_internal_experiment_embedding,
+)
 from app.services.embedding_service import EmbeddingService
 from app.services.rag_engine import generate_report
 
@@ -62,8 +70,9 @@ class RAGContextResponse(BaseModel):
 
 
 class RAGQueryResponse(BaseModel):
-    """RAG query result: markdown report (source) and PDF (for download/view)."""
+    """RAG query result: report_id, markdown report (source) and PDF (for download/view)."""
 
+    report_id: str = Field(..., description="Unique ID for this report; use when populating in-house experiment results later")
     markdown: str = Field(..., description="Experiment report in Markdown (use this to verify content if PDF is faulty)")
     pdf_base64: str = Field(..., description="PDF report as base64; decode to display or download")
 
@@ -150,6 +159,7 @@ def get_rag_query(
     - **format=json** (default): JSON with `markdown` and `pdf_base64`.
     - **format=pdf**: Raw PDF with Content-Disposition attachment so the browser/Swagger triggers a download.
     """
+    report_id = str(uuid.uuid4())
     try:
         md_output, pdf_bytes = generate_report(body, llm_base_url="vertex")
     except ValueError as e:
@@ -159,6 +169,15 @@ def get_rag_query(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+    try:
+        create_internal_experiment_stub(
+            report_id=report_id,
+            bcs_class=body.bcs_class,
+            molecular_weight=body.molecular_weight,
+        )
+    except Exception as e:
+        pass  # Do not fail the response if stub creation fails (e.g. table not migrated yet)
+
     pdf_b64 = base64.b64encode(pdf_bytes).decode("ascii")
 
     if format == "pdf":
@@ -166,6 +185,108 @@ def get_rag_query(
         return Response(
             content=decoded_pdf,
             media_type="application/pdf",
-            headers={"Content-Disposition": 'attachment; filename="formulation_experiment_report.pdf"'},
+            headers={
+                "Content-Disposition": 'attachment; filename="formulation_experiment_report.pdf"',
+                "X-Report-Id": report_id,
+            },
         )
-    return RAGQueryResponse(markdown=md_output, pdf_base64=pdf_b64)
+    return RAGQueryResponse(report_id=report_id, markdown=md_output, pdf_base64=pdf_b64)
+
+
+# ---------------------------------------------------------------------------
+# Internal (in-house) experiment results: fetch by report_id, populate + embed
+# ---------------------------------------------------------------------------
+
+
+class InternalExperimentUpdateRequest(BaseModel):
+    """Lab-provided data to populate the internal experiment result for a RAG report."""
+
+    report_id: str = Field(..., description="Report ID from the RAG/query response")
+    experiment_summary: str = Field(..., description="Summary of the experiment and findings")
+    notes: Optional[str] = Field(None, description="Additional notes")
+    outcome: Optional[str] = Field(None, description="Outcome (e.g. success, failed, partial)")
+    conducted_at: Optional[str] = Field(None, description="Date conducted (YYYY-MM-DD)")
+
+
+@router.get(
+    "/internal-experiment-results/{report_id}",
+    summary="Get in-house experiment details by report ID",
+    response_description="The internal experiment result row for this report (stub or populated)",
+)
+def get_internal_experiment_by_report(report_id: str):
+    """
+    Fetch the in-house experiment record linked to the given RAG report ID.
+    Use the report_id returned from POST /RAG/query. Returns 404 if not found.
+    """
+    row = get_internal_experiment_by_report_id(report_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"No internal experiment result found for report_id={report_id}")
+    return row
+
+
+@router.post(
+    "/internal-experiment-results",
+    summary="Populate in-house experiment and create embedding",
+    response_description="Updated experiment row; embedding created for similarity search",
+)
+def populate_internal_experiment(body: InternalExperimentUpdateRequest):
+    """
+    Update the internal experiment result for the given report_id with lab findings,
+    then build text from the result, generate an embedding, and store it in
+    internal_experiment_embeddings so it appears in future RAG similarity search.
+    """
+    try:
+        updated = update_internal_experiment_from_lab(
+            report_id=body.report_id,
+            experiment_summary=body.experiment_summary,
+            notes=body.notes,
+            outcome=body.outcome,
+            conducted_at=body.conducted_at,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if updated is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No internal experiment result found for report_id={body.report_id}. Generate a report first via POST /RAG/query.",
+        )
+
+    # Build text for embedding (same style as query: BCS, MW, summary, notes)
+    parts = [
+        f"BCS Class {updated['bcs_class']}",
+        f"Experiment: {updated['experiment_summary']}",
+    ]
+    if updated.get("molecular_weight_min") is not None or updated.get("molecular_weight_max") is not None:
+        mw_min = updated.get("molecular_weight_min")
+        mw_max = updated.get("molecular_weight_max")
+        if mw_min is not None and mw_max is not None and mw_min == mw_max:
+            parts.append(f"Molecular Weight {mw_min} Da")
+        else:
+            parts.append(f"Molecular weight range {mw_min or '?'}-{mw_max or '?'} Da")
+    if updated.get("notes"):
+        parts.append(f"Notes: {updated['notes']}")
+    if updated.get("outcome"):
+        parts.append(f"Outcome: {updated['outcome']}")
+    text_for_embedding = ". ".join(parts)
+
+    embedding_service = EmbeddingService()
+    try:
+        embedding = embedding_service.generate_embedding(text_for_embedding)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Embedding generation failed: {e}")
+
+    try:
+        insert_internal_experiment_embedding(
+            internal_experiment_result_id=updated["id"],
+            text_content=text_for_embedding,
+            embedding=embedding,
+            report_id=body.report_id,
+            metadata={"report_id": body.report_id},
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to store embedding: {e}")
+
+    return {
+        "message": "Internal experiment updated and embedding created.",
+        "internal_experiment_result": updated,
+    }

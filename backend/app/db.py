@@ -530,6 +530,175 @@ def get_internal_experiment_results_by_ids(ids: list[int]) -> list[dict]:
         raise RuntimeError(f"get_internal_experiment_results_by_ids failed: {e}")
 
 
+def create_internal_experiment_stub(
+    report_id: str,
+    bcs_class: str,
+    molecular_weight: float | None = None,
+) -> int:
+    """
+    Create a placeholder row in internal_experiment_results when a RAG report is generated.
+    Chemists can later populate experiment_summary, notes, outcome, conducted_at via the API.
+    Returns the id of the created row.
+    """
+    if not report_id or not bcs_class:
+        raise ValueError("report_id and bcs_class are required")
+    mw_min = molecular_weight if molecular_weight is not None else None
+    mw_max = molecular_weight if molecular_weight is not None else None
+    try:
+        with engine.connect() as connection:
+            result = connection.execute(
+                text("""
+                    INSERT INTO internal_experiment_results
+                    (report_id, bcs_class, molecular_weight_min, molecular_weight_max, experiment_summary)
+                    VALUES (:report_id, :bcs_class, :mw_min, :mw_max, 'To be populated')
+                    RETURNING id
+                """),
+                {
+                    "report_id": report_id,
+                    "bcs_class": bcs_class.strip(),
+                    "mw_min": mw_min,
+                    "mw_max": mw_max,
+                },
+            )
+            connection.commit()
+            return result.scalar()
+    except Exception as e:
+        raise RuntimeError(f"create_internal_experiment_stub failed: {e}")
+
+
+def get_internal_experiment_by_report_id(report_id: str) -> dict | None:
+    """
+    Fetch the internal_experiment_results row for the given report_id (e.g. for GET by report).
+    Returns None if not found.
+    """
+    if not report_id:
+        return None
+    try:
+        with engine.connect() as connection:
+            result = connection.execute(
+                text("""
+                    SELECT id, report_id, bcs_class, molecular_weight_min, molecular_weight_max,
+                           experiment_summary, notes, outcome, conducted_at, created_at, metadata
+                    FROM internal_experiment_results
+                    WHERE report_id = :report_id
+                """),
+                {"report_id": report_id},
+            )
+            row = result.fetchone()
+            if not row:
+                return None
+            return {
+                "id": row[0],
+                "report_id": row[1],
+                "bcs_class": row[2],
+                "molecular_weight_min": float(row[3]) if row[3] is not None else None,
+                "molecular_weight_max": float(row[4]) if row[4] is not None else None,
+                "experiment_summary": row[5],
+                "notes": row[6],
+                "outcome": row[7],
+                "conducted_at": str(row[8]) if row[8] else None,
+                "created_at": str(row[9]) if row[9] else None,
+                "metadata": row[10],
+            }
+    except Exception as e:
+        if "internal_experiment_results" in str(e) and "does not exist" in str(e).lower():
+            return None
+        raise RuntimeError(f"get_internal_experiment_by_report_id failed: {e}")
+
+
+def update_internal_experiment_from_lab(
+    report_id: str,
+    experiment_summary: str,
+    notes: str | None = None,
+    outcome: str | None = None,
+    conducted_at: str | None = None,
+) -> dict | None:
+    """
+    Update the internal_experiment_results row for this report_id with lab-provided data.
+    Returns the updated row as a dict, or None if no row found for report_id.
+    """
+    if not report_id or not experiment_summary:
+        raise ValueError("report_id and experiment_summary are required")
+    try:
+        with engine.connect() as connection:
+            result = connection.execute(
+                text("""
+                    UPDATE internal_experiment_results
+                    SET experiment_summary = :experiment_summary,
+                        notes = :notes,
+                        outcome = :outcome,
+                        conducted_at = CAST(:conducted_at AS DATE)
+                    WHERE report_id = :report_id
+                    RETURNING id, report_id, bcs_class, molecular_weight_min, molecular_weight_max,
+                              experiment_summary, notes, outcome, conducted_at, created_at, metadata
+                """),
+                {
+                    "report_id": report_id,
+                    "experiment_summary": experiment_summary.strip(),
+                    "notes": notes.strip() if notes else None,
+                    "outcome": outcome.strip() if outcome else None,
+                    "conducted_at": conducted_at if conducted_at else None,
+                },
+            )
+            connection.commit()
+            row = result.fetchone()
+            if not row:
+                return None
+            return {
+                "id": row[0],
+                "report_id": row[1],
+                "bcs_class": row[2],
+                "molecular_weight_min": float(row[3]) if row[3] is not None else None,
+                "molecular_weight_max": float(row[4]) if row[4] is not None else None,
+                "experiment_summary": row[5],
+                "notes": row[6],
+                "outcome": row[7],
+                "conducted_at": str(row[8]) if row[8] else None,
+                "created_at": str(row[9]) if row[9] else None,
+                "metadata": row[10],
+            }
+    except Exception as e:
+        if "internal_experiment_results" in str(e) and "does not exist" in str(e).lower():
+            return None
+        raise RuntimeError(f"update_internal_experiment_from_lab failed: {e}")
+
+
+def insert_internal_experiment_embedding(
+    internal_experiment_result_id: int,
+    text_content: str,
+    embedding: list[float],
+    report_id: str | None = None,
+    metadata: dict | None = None,
+) -> int:
+    """
+    Insert a row into internal_experiment_embeddings (with optional report_id).
+    Returns the id of the inserted row.
+    """
+    import json
+    embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
+    try:
+        with engine.connect() as connection:
+            result = connection.execute(
+                text("""
+                    INSERT INTO internal_experiment_embeddings
+                    (internal_experiment_result_id, text_content, embedding, report_id, metadata)
+                    VALUES (:fk_value, :text_content, CAST(:embedding AS vector), :report_id, CAST(:metadata AS jsonb))
+                    RETURNING id
+                """),
+                {
+                    "fk_value": internal_experiment_result_id,
+                    "text_content": text_content,
+                    "embedding": embedding_str,
+                    "report_id": report_id,
+                    "metadata": json.dumps(metadata) if metadata else "{}",
+                },
+            )
+            connection.commit()
+            return result.scalar()
+    except Exception as e:
+        raise RuntimeError(f"insert_internal_experiment_embedding failed: {e}")
+
+
 def insert_embedding(
     table: str,
     text_content: str,
