@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, text
+from sqlalchemy import bindparam, create_engine, text
 from sqlalchemy.engine import Engine
 
 from app.config import settings
@@ -50,6 +50,9 @@ EXPECTED_TABLES = [
     # Stability tables
     "stability_studies",
     "stability_results",
+    # Internal (in-house) experimentation
+    "internal_experiment_results",
+    "internal_experiment_embeddings",
     # Embedding tables (replaces ChromaDB collections)
     "formulation_summary_embeddings",
     "manufacturing_process_embeddings",
@@ -66,6 +69,7 @@ EMBEDDING_TABLES = [
     "in_vitro_embeddings",
     "in_vivo_embeddings",
     "document_chunk_embeddings",
+    "internal_experiment_embeddings",
 ]
 
 # Tables that have formulation_uid column (for RAG context linking)
@@ -75,6 +79,11 @@ EMBEDDING_TABLES_WITH_UID = [
     "particle_analytics_embeddings",
     "in_vitro_embeddings",
     "in_vivo_embeddings",
+]
+
+# Tables that have internal_experiment_result_id (for RAG internal-experiment retrieval)
+EMBEDDING_TABLES_WITH_INTERNAL_RESULT_ID = [
+    "internal_experiment_embeddings",
 ]
 
 
@@ -238,8 +247,9 @@ def vector_search(
     # Convert embedding list to pgvector format
     embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
     include_uid = table in EMBEDDING_TABLES_WITH_UID
+    include_internal_result_id = table in EMBEDDING_TABLES_WITH_INTERNAL_RESULT_ID
 
-    # Build query; include formulation_uid when present for RAG context
+    # Build query; include formulation_uid or internal_experiment_result_id when present
     if include_uid:
         base_query = f"""
             SELECT 
@@ -248,6 +258,17 @@ def vector_search(
                 1 - (embedding <=> CAST(:embedding AS vector)) as similarity,
                 metadata,
                 formulation_uid
+            FROM {table}
+            WHERE embedding IS NOT NULL
+        """
+    elif include_internal_result_id:
+        base_query = f"""
+            SELECT 
+                id,
+                text_content,
+                1 - (embedding <=> CAST(:embedding AS vector)) as similarity,
+                metadata,
+                internal_experiment_result_id
             FROM {table}
             WHERE embedding IS NOT NULL
         """
@@ -289,6 +310,8 @@ def vector_search(
                 }
                 if include_uid:
                     out["formulation_uid"] = row[4]
+                elif include_internal_result_id:
+                    out["internal_experiment_result_id"] = row[4]
                 rows.append(out)
             return rows
     except Exception as e:
@@ -394,6 +417,117 @@ def get_formulation_context_by_uids(formulation_uids: list[str]) -> list[dict]:
             return [form_by_uid[uid] for uid in uids if uid in form_by_uid]
     except Exception as e:
         raise RuntimeError(f"get_formulation_context_by_uids failed: {e}")
+
+
+def get_internal_experiment_results(
+    bcs_class: str,
+    molecular_weight: float | None = None,
+    limit: int = 50,
+) -> list[dict]:
+    """
+    Fetch internal (in-house) experiment results matching the given BCS class and
+    optional molecular weight. Rows with both molecular_weight_min and molecular_weight_max
+    NULL match any MW; otherwise MW must fall within the range.
+
+    Returns list of dicts with keys: id, bcs_class, molecular_weight_min, molecular_weight_max,
+    experiment_summary, notes, outcome, conducted_at, created_at, metadata.
+    """
+    if not bcs_class or not bcs_class.strip():
+        return []
+    try:
+        with engine.connect() as connection:
+            if molecular_weight is not None:
+                result = connection.execute(
+                    text("""
+                        SELECT id, bcs_class, molecular_weight_min, molecular_weight_max,
+                               experiment_summary, notes, outcome, conducted_at, created_at, metadata
+                        FROM internal_experiment_results
+                        WHERE bcs_class = :bcs_class
+                          AND (
+                            (molecular_weight_min IS NULL AND molecular_weight_max IS NULL)
+                            OR (
+                              (molecular_weight_min IS NULL OR molecular_weight_min <= :mw)
+                              AND (molecular_weight_max IS NULL OR molecular_weight_max >= :mw)
+                            )
+                          )
+                        ORDER BY conducted_at DESC NULLS LAST, created_at DESC
+                        LIMIT :limit
+                    """),
+                    {"bcs_class": bcs_class.strip(), "mw": molecular_weight, "limit": limit},
+                )
+            else:
+                result = connection.execute(
+                    text("""
+                        SELECT id, bcs_class, molecular_weight_min, molecular_weight_max,
+                               experiment_summary, notes, outcome, conducted_at, created_at, metadata
+                        FROM internal_experiment_results
+                        WHERE bcs_class = :bcs_class
+                        ORDER BY conducted_at DESC NULLS LAST, created_at DESC
+                        LIMIT :limit
+                    """),
+                    {"bcs_class": bcs_class.strip(), "limit": limit},
+                )
+            rows = result.fetchall()
+            return [
+                {
+                    "id": r[0],
+                    "bcs_class": r[1],
+                    "molecular_weight_min": float(r[2]) if r[2] is not None else None,
+                    "molecular_weight_max": float(r[3]) if r[3] is not None else None,
+                    "experiment_summary": r[4],
+                    "notes": r[5],
+                    "outcome": r[6],
+                    "conducted_at": str(r[7]) if r[7] else None,
+                    "created_at": str(r[8]) if r[8] else None,
+                    "metadata": r[9],
+                }
+                for r in rows
+            ]
+    except Exception as e:
+        if "internal_experiment_results" in str(e) and "does not exist" in str(e).lower():
+            return []
+        raise RuntimeError(f"get_internal_experiment_results failed: {e}")
+
+
+def get_internal_experiment_results_by_ids(ids: list[int]) -> list[dict]:
+    """
+    Fetch full rows from internal_experiment_results by id list (e.g. from vector search).
+    Returns list of dicts with same shape as get_internal_experiment_results; order follows ids.
+    """
+    if not ids:
+        return []
+    unique_ids = list(dict.fromkeys(i for i in ids if i is not None))
+    if not unique_ids:
+        return []
+    try:
+        stmt = text("""
+            SELECT id, bcs_class, molecular_weight_min, molecular_weight_max,
+                   experiment_summary, notes, outcome, conducted_at, created_at, metadata
+            FROM internal_experiment_results
+            WHERE id IN :ids
+        """).bindparams(bindparam("ids", expanding=True))
+        with engine.connect() as connection:
+            result = connection.execute(stmt, {"ids": unique_ids})
+            rows_by_id = {
+                r[0]: {
+                    "id": r[0],
+                    "bcs_class": r[1],
+                    "molecular_weight_min": float(r[2]) if r[2] is not None else None,
+                    "molecular_weight_max": float(r[3]) if r[3] is not None else None,
+                    "experiment_summary": r[4],
+                    "notes": r[5],
+                    "outcome": r[6],
+                    "conducted_at": str(r[7]) if r[7] else None,
+                    "created_at": str(r[8]) if r[8] else None,
+                    "metadata": r[9],
+                }
+                for r in result.fetchall()
+            }
+            return [rows_by_id[i] for i in unique_ids if i in rows_by_id]
+    except Exception as e:
+        if "internal_experiment_results" in str(e) and "does not exist" in str(e).lower():
+            return []
+        raise RuntimeError(f"get_internal_experiment_results_by_ids failed: {e}")
 
 
 def insert_embedding(
