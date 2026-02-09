@@ -7,10 +7,11 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SQL_DIR="$(cd "$SCRIPT_DIR/../sql/feature" && pwd)"
 POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-postgres}"
 POSTGRES_DB="${POSTGRES_DB:-formulation_rag}"
 
-echo "=== Initializing PostgreSQL Tables ==="
+echo "=== Initializing PostgreSQL Tables (from $SQL_DIR) ==="
 
 # Check if PostgreSQL is running
 if ! sudo docker exec rag-postgres pg_isready -U postgres > /dev/null 2>&1; then
@@ -18,9 +19,16 @@ if ! sudo docker exec rag-postgres pg_isready -U postgres > /dev/null 2>&1; then
     exit 1
 fi
 
-# Run the init script
-echo "Running init_db.sql..."
-sudo docker exec -i rag-postgres psql -U postgres -d $POSTGRES_DB < "$SCRIPT_DIR/init_db.sql"
+# Run init then migrations (same order as deploy workflows)
+if [ -f "$SQL_DIR/init_db.sql" ]; then
+    echo "Running init_db.sql..."
+    sudo docker exec -i rag-postgres psql -U postgres -d $POSTGRES_DB < "$SQL_DIR/init_db.sql"
+fi
+for f in "$SQL_DIR"/migrate_*.sql; do
+    [ -f "$f" ] || continue
+    echo "Running $(basename "$f")..."
+    sudo docker exec -i rag-postgres psql -U postgres -d $POSTGRES_DB < "$f" || true
+done
 
 # Verify tables were created
 echo ""
