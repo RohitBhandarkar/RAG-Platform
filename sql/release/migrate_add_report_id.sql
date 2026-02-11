@@ -4,14 +4,9 @@
 ALTER TABLE internal_experiment_results
 ADD COLUMN IF NOT EXISTS report_id VARCHAR(64) UNIQUE;
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_internal_experiment_results_report_id
-ON internal_experiment_results (report_id) WHERE report_id IS NOT NULL;
-
 ALTER TABLE internal_experiment_embeddings
 ADD COLUMN IF NOT EXISTS report_id VARCHAR(64);
 
-CREATE INDEX IF NOT EXISTS idx_internal_experiment_embeddings_report_id
-ON internal_experiment_embeddings (report_id) WHERE report_id IS NOT NULL;
 
 COMMENT ON COLUMN internal_experiment_results.report_id IS 'ID of the RAG report that prompted this experiment (stub created at report time, populated later by lab).';
 COMMENT ON COLUMN internal_experiment_embeddings.report_id IS 'ID of the RAG report; set when lab populates the experiment and we create the embedding.';

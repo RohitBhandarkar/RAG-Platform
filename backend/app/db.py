@@ -566,11 +566,60 @@ def create_internal_experiment_stub(
         raise RuntimeError(f"create_internal_experiment_stub failed: {e}")
 
 
+def _row_to_internal_experiment_dict(row) -> dict:
+    """Convert a result row to the standard internal experiment dict."""
+    return {
+        "id": row[0],
+        "report_id": row[1],
+        "bcs_class": row[2],
+        "molecular_weight_min": float(row[3]) if row[3] is not None else None,
+        "molecular_weight_max": float(row[4]) if row[4] is not None else None,
+        "experiment_summary": row[5],
+        "notes": row[6],
+        "outcome": row[7],
+        "conducted_at": str(row[8]) if row[8] else None,
+        "created_at": str(row[9]) if row[9] else None,
+        "metadata": row[10],
+    }
+
+
 def get_internal_experiment_by_report_id(report_id: str) -> dict | None:
     """
-    Fetch the internal_experiment_results row for the given report_id (e.g. for GET by report).
-    Returns None if not found.
+    Fetch the first internal_experiment_results row for the given report_id.
+    Returns None if not found. (For multiple rows, use get_internal_experiment_results_by_report_id.)
     """
+    rows = get_internal_experiment_results_by_report_id(report_id)
+    return rows[0] if rows else None
+
+
+def get_internal_experiment_results_by_report_id(report_id: str) -> list[dict]:
+    """
+    Fetch all internal_experiment_results rows for the given report_id (ordered by id).
+    Allows multiple in-house experiment entries per report.
+    """
+    if not report_id:
+        return []
+    try:
+        with engine.connect() as connection:
+            result = connection.execute(
+                text("""
+                    SELECT id, report_id, bcs_class, molecular_weight_min, molecular_weight_max,
+                           experiment_summary, notes, outcome, conducted_at, created_at, metadata
+                    FROM internal_experiment_results
+                    WHERE report_id = :report_id
+                    ORDER BY id
+                """),
+                {"report_id": report_id},
+            )
+            return [_row_to_internal_experiment_dict(r) for r in result.fetchall()]
+    except Exception as e:
+        if "internal_experiment_results" in str(e) and "does not exist" in str(e).lower():
+            return []
+        raise RuntimeError(f"get_internal_experiment_results_by_report_id failed: {e}")
+
+
+def get_stub_internal_experiment_by_report_id(report_id: str) -> dict | None:
+    """Return the first row for this report_id that is still a stub (experiment_summary = 'To be populated')."""
     if not report_id:
         return None
     try:
@@ -580,30 +629,66 @@ def get_internal_experiment_by_report_id(report_id: str) -> dict | None:
                     SELECT id, report_id, bcs_class, molecular_weight_min, molecular_weight_max,
                            experiment_summary, notes, outcome, conducted_at, created_at, metadata
                     FROM internal_experiment_results
-                    WHERE report_id = :report_id
+                    WHERE report_id = :report_id AND experiment_summary = 'To be populated'
+                    ORDER BY id
+                    LIMIT 1
                 """),
                 {"report_id": report_id},
             )
             row = result.fetchone()
-            if not row:
-                return None
-            return {
-                "id": row[0],
-                "report_id": row[1],
-                "bcs_class": row[2],
-                "molecular_weight_min": float(row[3]) if row[3] is not None else None,
-                "molecular_weight_max": float(row[4]) if row[4] is not None else None,
-                "experiment_summary": row[5],
-                "notes": row[6],
-                "outcome": row[7],
-                "conducted_at": str(row[8]) if row[8] else None,
-                "created_at": str(row[9]) if row[9] else None,
-                "metadata": row[10],
-            }
+            return _row_to_internal_experiment_dict(row) if row else None
     except Exception as e:
         if "internal_experiment_results" in str(e) and "does not exist" in str(e).lower():
             return None
-        raise RuntimeError(f"get_internal_experiment_by_report_id failed: {e}")
+        raise RuntimeError(f"get_stub_internal_experiment_by_report_id failed: {e}")
+
+
+def insert_internal_experiment_result(
+    report_id: str,
+    bcs_class: str,
+    molecular_weight_min: float | None,
+    molecular_weight_max: float | None,
+    experiment_summary: str,
+    notes: str | None = None,
+    outcome: str | None = None,
+    conducted_at: str | None = None,
+) -> dict:
+    """
+    Insert a new internal_experiment_results row (e.g. additional experiment for same report).
+    Returns the new row as a dict.
+    """
+    if not report_id or not bcs_class or not experiment_summary:
+        raise ValueError("report_id, bcs_class and experiment_summary are required")
+    try:
+        with engine.connect() as connection:
+            result = connection.execute(
+                text("""
+                    INSERT INTO internal_experiment_results
+                    (report_id, bcs_class, molecular_weight_min, molecular_weight_max,
+                     experiment_summary, notes, outcome, conducted_at)
+                    VALUES (:report_id, :bcs_class, :mw_min, :mw_max, :experiment_summary,
+                            :notes, :outcome, CAST(:conducted_at AS DATE))
+                    RETURNING id, report_id, bcs_class, molecular_weight_min, molecular_weight_max,
+                              experiment_summary, notes, outcome, conducted_at, created_at, metadata
+                """),
+                {
+                    "report_id": report_id,
+                    "bcs_class": bcs_class.strip(),
+                    "mw_min": molecular_weight_min,
+                    "mw_max": molecular_weight_max,
+                    "experiment_summary": experiment_summary.strip(),
+                    "notes": notes.strip() if notes else None,
+                    "outcome": outcome.strip() if outcome else None,
+                    "conducted_at": conducted_at if conducted_at else None,
+                },
+            )
+            connection.commit()
+            row = result.fetchone()
+            if not row:
+                raise RuntimeError("Insert did not return row")
+            return _row_to_internal_experiment_dict(row)
+    except Exception as e:
+        raise RuntimeError(f"insert_internal_experiment_result failed: {e}")
 
 
 def update_internal_experiment_from_lab(
@@ -614,53 +699,57 @@ def update_internal_experiment_from_lab(
     conducted_at: str | None = None,
 ) -> dict | None:
     """
-    Update the internal_experiment_results row for this report_id with lab-provided data.
-    Returns the updated row as a dict, or None if no row found for report_id.
+    Add or update an in-house experiment for this report_id.
+    If a stub row exists (experiment_summary = 'To be populated'), update it.
+    Otherwise insert a new row (copying bcs_class and MW from an existing row for this report).
+    Returns the updated or new row, or None if no row exists for report_id when adding another.
     """
     if not report_id or not experiment_summary:
         raise ValueError("report_id and experiment_summary are required")
-    try:
-        with engine.connect() as connection:
-            result = connection.execute(
-                text("""
-                    UPDATE internal_experiment_results
-                    SET experiment_summary = :experiment_summary,
-                        notes = :notes,
-                        outcome = :outcome,
-                        conducted_at = CAST(:conducted_at AS DATE)
-                    WHERE report_id = :report_id
-                    RETURNING id, report_id, bcs_class, molecular_weight_min, molecular_weight_max,
-                              experiment_summary, notes, outcome, conducted_at, created_at, metadata
-                """),
-                {
-                    "report_id": report_id,
-                    "experiment_summary": experiment_summary.strip(),
-                    "notes": notes.strip() if notes else None,
-                    "outcome": outcome.strip() if outcome else None,
-                    "conducted_at": conducted_at if conducted_at else None,
-                },
-            )
-            connection.commit()
-            row = result.fetchone()
-            if not row:
-                return None
-            return {
-                "id": row[0],
-                "report_id": row[1],
-                "bcs_class": row[2],
-                "molecular_weight_min": float(row[3]) if row[3] is not None else None,
-                "molecular_weight_max": float(row[4]) if row[4] is not None else None,
-                "experiment_summary": row[5],
-                "notes": row[6],
-                "outcome": row[7],
-                "conducted_at": str(row[8]) if row[8] else None,
-                "created_at": str(row[9]) if row[9] else None,
-                "metadata": row[10],
-            }
-    except Exception as e:
-        if "internal_experiment_results" in str(e) and "does not exist" in str(e).lower():
-            return None
-        raise RuntimeError(f"update_internal_experiment_from_lab failed: {e}")
+    stub = get_stub_internal_experiment_by_report_id(report_id)
+    if stub:
+        # Update the stub row by id
+        try:
+            with engine.connect() as connection:
+                result = connection.execute(
+                    text("""
+                        UPDATE internal_experiment_results
+                        SET experiment_summary = :experiment_summary,
+                            notes = :notes,
+                            outcome = :outcome,
+                            conducted_at = CAST(:conducted_at AS DATE)
+                        WHERE id = :id
+                        RETURNING id, report_id, bcs_class, molecular_weight_min, molecular_weight_max,
+                                  experiment_summary, notes, outcome, conducted_at, created_at, metadata
+                    """),
+                    {
+                        "id": stub["id"],
+                        "experiment_summary": experiment_summary.strip(),
+                        "notes": notes.strip() if notes else None,
+                        "outcome": outcome.strip() if outcome else None,
+                        "conducted_at": conducted_at if conducted_at else None,
+                    },
+                )
+                connection.commit()
+                row = result.fetchone()
+                return _row_to_internal_experiment_dict(row) if row else None
+        except Exception as e:
+            raise RuntimeError(f"update_internal_experiment_from_lab failed: {e}")
+    # No stub: add a new row (copy bcs/mw from any existing row for this report)
+    existing = get_internal_experiment_results_by_report_id(report_id)
+    if not existing:
+        return None
+    first = existing[0]
+    return insert_internal_experiment_result(
+        report_id=report_id,
+        bcs_class=first["bcs_class"],
+        molecular_weight_min=first.get("molecular_weight_min"),
+        molecular_weight_max=first.get("molecular_weight_max"),
+        experiment_summary=experiment_summary,
+        notes=notes,
+        outcome=outcome,
+        conducted_at=conducted_at,
+    )
 
 
 def update_internal_experiment_partial(
@@ -669,16 +758,17 @@ def update_internal_experiment_partial(
     notes: str | None = None,
     outcome: str | None = None,
     conducted_at: str | None = None,
+    result_id: int | None = None,
 ) -> dict | None:
     """
-    Partially update the internal_experiment_results row for this report_id.
+    Partially update one internal_experiment_results row for this report_id.
+    If result_id is given, update that row (must belong to report_id). Otherwise update the first row.
     Only provided (non-None) fields are updated. Returns the full updated row, or None if not found.
     """
     if not report_id:
         raise ValueError("report_id is required")
-    # Build dynamic SET clause and params
     updates = []
-    params = {"report_id": report_id}
+    params: dict = {"report_id": report_id}
     if experiment_summary is not None:
         updates.append("experiment_summary = :experiment_summary")
         params["experiment_summary"] = experiment_summary.strip()
@@ -692,16 +782,28 @@ def update_internal_experiment_partial(
         updates.append("conducted_at = CAST(:conducted_at AS DATE)")
         params["conducted_at"] = conducted_at if conducted_at else None
     if not updates:
-        # No fields to update; just fetch and return current row
+        if result_id is not None:
+            rows = get_internal_experiment_results_by_report_id(report_id)
+            for r in rows:
+                if r["id"] == result_id:
+                    return r
+            return None
         return get_internal_experiment_by_report_id(report_id)
     set_clause = ", ".join(updates)
+    where = "report_id = :report_id"
+    if result_id is not None:
+        where += " AND id = :result_id"
+        params["result_id"] = result_id
+    else:
+        # Update only the first row (by id) for this report_id
+        where += " AND id = (SELECT id FROM internal_experiment_results WHERE report_id = :report_id ORDER BY id LIMIT 1)"
     try:
         with engine.connect() as connection:
             result = connection.execute(
                 text(f"""
                     UPDATE internal_experiment_results
                     SET {set_clause}
-                    WHERE report_id = :report_id
+                    WHERE {where}
                     RETURNING id, report_id, bcs_class, molecular_weight_min, molecular_weight_max,
                               experiment_summary, notes, outcome, conducted_at, created_at, metadata
                 """),
@@ -709,21 +811,7 @@ def update_internal_experiment_partial(
             )
             connection.commit()
             row = result.fetchone()
-            if not row:
-                return None
-            return {
-                "id": row[0],
-                "report_id": row[1],
-                "bcs_class": row[2],
-                "molecular_weight_min": float(row[3]) if row[3] is not None else None,
-                "molecular_weight_max": float(row[4]) if row[4] is not None else None,
-                "experiment_summary": row[5],
-                "notes": row[6],
-                "outcome": row[7],
-                "conducted_at": str(row[8]) if row[8] else None,
-                "created_at": str(row[9]) if row[9] else None,
-                "metadata": row[10],
-            }
+            return _row_to_internal_experiment_dict(row) if row else None
     except Exception as e:
         if "internal_experiment_results" in str(e) and "does not exist" in str(e).lower():
             return None

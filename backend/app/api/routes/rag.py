@@ -1,6 +1,7 @@
 """RAG context endpoint: user API input -> K nearest embeddings + formulation details."""
 
 import base64
+import re
 import uuid
 from typing import Any, Dict, List, Literal, Optional
 
@@ -12,7 +13,7 @@ from app.db import (
     vector_search,
     get_formulation_context_by_uids,
     create_internal_experiment_stub,
-    get_internal_experiment_by_report_id,
+    get_internal_experiment_results_by_report_id,
     update_internal_experiment_from_lab,
     update_internal_experiment_partial,
     insert_internal_experiment_embedding,
@@ -77,6 +78,18 @@ class RAGQueryResponse(BaseModel):
     report_id: str = Field(..., description="Unique ID for this report; use when populating in-house experiment results later")
     markdown: str = Field(..., description="Experiment report in Markdown (use this to verify content if PDF is faulty)")
     pdf_base64: str = Field(..., description="PDF report as base64; decode to display or download")
+
+
+def _build_report_pdf_filename(body: RAGContextRequest, report_id: str) -> str:
+    """Build a safe, descriptive PDF filename from API input and report_id."""
+    bcs_safe = re.sub(r"[^\w\-.]", "_", (body.bcs_class or "").strip()) or "BCS"
+    mw = body.molecular_weight
+    mw_str = f"{mw:.1f}" if mw is not None and isinstance(mw, (int, float)) else "MW"
+    report_prefix = (report_id or "")[:8] if report_id else ""
+    name = f"formulation_report_BCS-{bcs_safe}_MW-{mw_str}"
+    if report_prefix:
+        name += f"_{report_prefix}"
+    return f"{name}.pdf"
 
 
 def _build_query_text(body: RAGContextRequest) -> str:
@@ -184,11 +197,12 @@ def get_rag_query(
 
     if format == "pdf":
         decoded_pdf = base64.b64decode(pdf_b64)
+        filename = _build_report_pdf_filename(body, report_id)
         return Response(
             content=decoded_pdf,
             media_type="application/pdf",
             headers={
-                "Content-Disposition": 'attachment; filename="formulation_experiment_report.pdf"',
+                "Content-Disposition": f'attachment; filename="{filename}"',
                 "X-Report-Id": report_id,
             },
         )
@@ -213,6 +227,7 @@ class InternalExperimentUpdateRequest(BaseModel):
 class InternalExperimentPatchRequest(BaseModel):
     """Optional fields to update on an existing internal experiment result (e.g. notes only)."""
 
+    result_id: Optional[int] = Field(None, description="ID of the specific result row to update (required when report has multiple entries)")
     experiment_summary: Optional[str] = Field(None, description="Summary of the experiment and findings")
     notes: Optional[str] = Field(None, description="Additional notes")
     outcome: Optional[str] = Field(None, description="Outcome (e.g. success, failed, partial)")
@@ -228,18 +243,17 @@ class InternalExperimentSubmitResponse(BaseModel):
 
 @router.get(
     "/internal-experiment-results/{report_id}",
-    summary="Get in-house experiment details by report ID",
-    response_description="The internal experiment result row for this report (stub or populated)",
+    summary="Get all in-house experiment entries for a report ID",
+    response_description="List of internal experiment result rows for this report (stubs and populated)",
 )
-def get_internal_experiment_by_report(report_id: str):
+def get_internal_experiments_by_report(report_id: str):
     """
-    Fetch the in-house experiment record linked to the given RAG report ID.
-    Use the report_id returned from POST /RAG/query. Returns 404 if not found.
+    Fetch all in-house experiment records for the given RAG report ID.
+    One report can have multiple entries (submit multiple times via POST /RAG/internal-experiment-results).
+    Returns empty list if none found.
     """
-    row = get_internal_experiment_by_report_id(report_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail=f"No internal experiment result found for report_id={report_id}")
-    return row
+    rows = get_internal_experiment_results_by_report_id(report_id)
+    return rows
 
 
 def _build_embedding_text_and_upsert(
@@ -341,6 +355,7 @@ def patch_internal_experiment(report_id: str, body: InternalExperimentPatchReque
             notes=body.notes,
             outcome=body.outcome,
             conducted_at=body.conducted_at,
+            result_id=body.result_id,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

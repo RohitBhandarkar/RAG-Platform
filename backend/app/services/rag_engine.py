@@ -405,10 +405,10 @@ def generate_report(
     md_output = llm.generate_text(prompt)
     if report_id:
         md_output = (
-            md_output.rstrip()
-            + "\n\n---\n\n**Report ID:** `"
+            "**Report ID:** `"
             + report_id
-            + "`\n\n*Use this ID when submitting in-house experiment results (POST /RAG/internal-experiment-results).*"
+            + "`\n\n*Use this ID when submitting in-house experiment results (POST /RAG/internal-experiment-results).*\n\n---\n\n"
+            + md_output
         )
     pdf_bytes = markdown_to_pdf(md_output)
     return md_output, pdf_bytes
