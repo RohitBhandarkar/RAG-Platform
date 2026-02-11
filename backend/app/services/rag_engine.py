@@ -381,9 +381,11 @@ def generate_report(
     body: Any,
     *,
     llm_base_url: str = "vertex",
+    report_id: str | None = None,
 ) -> Tuple[str, bytes]:
     """
     Full RAG pipeline: get context, generate markdown report via Vertex AI, convert to PDF.
+    If report_id is provided, it is appended to the markdown (and thus visible in the PDF).
     Returns (markdown_str, pdf_bytes).
     """
     query_text, query_embedding, nearest, formulation_details = get_rag_context(body)
@@ -401,5 +403,12 @@ def generate_report(
     prompt = _build_report_prompt(query_text, formulation_details, nearest, internal_results)
     llm = LLMService(base_url=llm_base_url)
     md_output = llm.generate_text(prompt)
+    if report_id:
+        md_output = (
+            md_output.rstrip()
+            + "\n\n---\n\n**Report ID:** `"
+            + report_id
+            + "`\n\n*Use this ID when submitting in-house experiment results (POST /RAG/internal-experiment-results).*"
+        )
     pdf_bytes = markdown_to_pdf(md_output)
     return md_output, pdf_bytes

@@ -14,7 +14,9 @@ from app.db import (
     create_internal_experiment_stub,
     get_internal_experiment_by_report_id,
     update_internal_experiment_from_lab,
+    update_internal_experiment_partial,
     insert_internal_experiment_embedding,
+    delete_internal_experiment_embeddings_for_result,
 )
 from app.services.embedding_service import EmbeddingService
 from app.services.rag_engine import generate_report
@@ -161,7 +163,7 @@ def get_rag_query(
     """
     report_id = str(uuid.uuid4())
     try:
-        md_output, pdf_bytes = generate_report(body, llm_base_url="vertex")
+        md_output, pdf_bytes = generate_report(body, llm_base_url="vertex", report_id=report_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except RuntimeError as e:
@@ -208,6 +210,22 @@ class InternalExperimentUpdateRequest(BaseModel):
     conducted_at: Optional[str] = Field(None, description="Date conducted (YYYY-MM-DD)")
 
 
+class InternalExperimentPatchRequest(BaseModel):
+    """Optional fields to update on an existing internal experiment result (e.g. notes only)."""
+
+    experiment_summary: Optional[str] = Field(None, description="Summary of the experiment and findings")
+    notes: Optional[str] = Field(None, description="Additional notes")
+    outcome: Optional[str] = Field(None, description="Outcome (e.g. success, failed, partial)")
+    conducted_at: Optional[str] = Field(None, description="Date conducted (YYYY-MM-DD)")
+
+
+class InternalExperimentSubmitResponse(BaseModel):
+    """Response after submitting or updating in-house experiment (embedding created)."""
+
+    message: str = Field(..., description="Success message")
+    internal_experiment_result: Dict[str, Any] = Field(..., description="Updated row from internal_experiment_results")
+
+
 @router.get(
     "/internal-experiment-results/{report_id}",
     summary="Get in-house experiment details by report ID",
@@ -224,16 +242,54 @@ def get_internal_experiment_by_report(report_id: str):
     return row
 
 
+def _build_embedding_text_and_upsert(
+    updated: dict,
+    report_id: str,
+    internal_experiment_result_id: int,
+) -> None:
+    """Build text from updated row, delete existing embeddings for this result, generate new embedding, insert."""
+    parts = [
+        f"BCS Class {updated['bcs_class']}",
+        f"Experiment: {updated.get('experiment_summary') or 'N/A'}",
+    ]
+    if updated.get("molecular_weight_min") is not None or updated.get("molecular_weight_max") is not None:
+        mw_min = updated.get("molecular_weight_min")
+        mw_max = updated.get("molecular_weight_max")
+        if mw_min is not None and mw_max is not None and mw_min == mw_max:
+            parts.append(f"Molecular Weight {mw_min} Da")
+        else:
+            parts.append(f"Molecular weight range {mw_min or '?'}-{mw_max or '?'} Da")
+    if updated.get("notes"):
+        parts.append(f"Notes: {updated['notes']}")
+    if updated.get("outcome"):
+        parts.append(f"Outcome: {updated['outcome']}")
+    text_for_embedding = ". ".join(parts)
+
+    embedding_service = EmbeddingService()
+    embedding = embedding_service.generate_embedding(text_for_embedding)
+
+    delete_internal_experiment_embeddings_for_result(internal_experiment_result_id)
+    insert_internal_experiment_embedding(
+        internal_experiment_result_id=internal_experiment_result_id,
+        text_content=text_for_embedding,
+        embedding=embedding,
+        report_id=report_id,
+        metadata={"report_id": report_id},
+    )
+
+
 @router.post(
     "/internal-experiment-results",
-    summary="Populate in-house experiment and create embedding",
-    response_description="Updated experiment row; embedding created for similarity search",
+    summary="Submit in-house experiment (update result + create embedding)",
+    response_model=InternalExperimentSubmitResponse,
+    response_description="Updated experiment row and confirmation that embedding was created for RAG.",
 )
 def populate_internal_experiment(body: InternalExperimentUpdateRequest):
     """
-    Update the internal experiment result for the given report_id with lab findings,
-    then build text from the result, generate an embedding, and store it in
-    internal_experiment_embeddings so it appears in future RAG similarity search.
+    Update the internal experiment result for the given report_id with lab findings (summary, notes, outcome, date).
+    Then build text from the result, generate an embedding, and store it in internal_experiment_embeddings
+    (replacing any existing embedding for this result) so it appears in future RAG similarity search.
+    Use the report_id returned from POST /RAG/query.
     """
     try:
         updated = update_internal_experiment_from_lab(
@@ -251,42 +307,55 @@ def populate_internal_experiment(body: InternalExperimentUpdateRequest):
             detail=f"No internal experiment result found for report_id={body.report_id}. Generate a report first via POST /RAG/query.",
         )
 
-    # Build text for embedding (same style as query: BCS, MW, summary, notes)
-    parts = [
-        f"BCS Class {updated['bcs_class']}",
-        f"Experiment: {updated['experiment_summary']}",
-    ]
-    if updated.get("molecular_weight_min") is not None or updated.get("molecular_weight_max") is not None:
-        mw_min = updated.get("molecular_weight_min")
-        mw_max = updated.get("molecular_weight_max")
-        if mw_min is not None and mw_max is not None and mw_min == mw_max:
-            parts.append(f"Molecular Weight {mw_min} Da")
-        else:
-            parts.append(f"Molecular weight range {mw_min or '?'}-{mw_max or '?'} Da")
-    if updated.get("notes"):
-        parts.append(f"Notes: {updated['notes']}")
-    if updated.get("outcome"):
-        parts.append(f"Outcome: {updated['outcome']}")
-    text_for_embedding = ". ".join(parts)
-
-    embedding_service = EmbeddingService()
     try:
-        embedding = embedding_service.generate_embedding(text_for_embedding)
+        _build_embedding_text_and_upsert(updated, body.report_id, updated["id"])
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Embedding generation failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Embedding failed: {e}")
 
-    try:
-        insert_internal_experiment_embedding(
-            internal_experiment_result_id=updated["id"],
-            text_content=text_for_embedding,
-            embedding=embedding,
-            report_id=body.report_id,
-            metadata={"report_id": body.report_id},
+    return InternalExperimentSubmitResponse(
+        message="Internal experiment updated and embedding created.",
+        internal_experiment_result=updated,
+    )
+
+
+@router.patch(
+    "/internal-experiment-results/{report_id}",
+    summary="Update in-house experiment notes (and/or summary, outcome, date) and refresh embedding",
+    response_model=InternalExperimentSubmitResponse,
+    response_description="Updated experiment row and new embedding for RAG.",
+)
+def patch_internal_experiment(report_id: str, body: InternalExperimentPatchRequest):
+    """
+    Partially update the internal experiment result (e.g. notes only). At least one field must be provided.
+    After update, a new embedding is built from the full row and stored (replacing any previous embedding for this result).
+    """
+    if body.experiment_summary is None and body.notes is None and body.outcome is None and body.conducted_at is None:
+        raise HTTPException(
+            status_code=400,
+            detail="At least one of experiment_summary, notes, outcome, or conducted_at must be provided.",
         )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to store embedding: {e}")
+    try:
+        updated = update_internal_experiment_partial(
+            report_id=report_id,
+            experiment_summary=body.experiment_summary,
+            notes=body.notes,
+            outcome=body.outcome,
+            conducted_at=body.conducted_at,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if updated is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No internal experiment result found for report_id={report_id}.",
+        )
 
-    return {
-        "message": "Internal experiment updated and embedding created.",
-        "internal_experiment_result": updated,
-    }
+    try:
+        _build_embedding_text_and_upsert(updated, report_id, updated["id"])
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Embedding failed: {e}")
+
+    return InternalExperimentSubmitResponse(
+        message="Internal experiment updated and embedding refreshed.",
+        internal_experiment_result=updated,
+    )

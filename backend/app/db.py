@@ -663,6 +663,93 @@ def update_internal_experiment_from_lab(
         raise RuntimeError(f"update_internal_experiment_from_lab failed: {e}")
 
 
+def update_internal_experiment_partial(
+    report_id: str,
+    experiment_summary: str | None = None,
+    notes: str | None = None,
+    outcome: str | None = None,
+    conducted_at: str | None = None,
+) -> dict | None:
+    """
+    Partially update the internal_experiment_results row for this report_id.
+    Only provided (non-None) fields are updated. Returns the full updated row, or None if not found.
+    """
+    if not report_id:
+        raise ValueError("report_id is required")
+    # Build dynamic SET clause and params
+    updates = []
+    params = {"report_id": report_id}
+    if experiment_summary is not None:
+        updates.append("experiment_summary = :experiment_summary")
+        params["experiment_summary"] = experiment_summary.strip()
+    if notes is not None:
+        updates.append("notes = :notes")
+        params["notes"] = notes.strip() if notes else None
+    if outcome is not None:
+        updates.append("outcome = :outcome")
+        params["outcome"] = outcome.strip() if outcome else None
+    if conducted_at is not None:
+        updates.append("conducted_at = CAST(:conducted_at AS DATE)")
+        params["conducted_at"] = conducted_at if conducted_at else None
+    if not updates:
+        # No fields to update; just fetch and return current row
+        return get_internal_experiment_by_report_id(report_id)
+    set_clause = ", ".join(updates)
+    try:
+        with engine.connect() as connection:
+            result = connection.execute(
+                text(f"""
+                    UPDATE internal_experiment_results
+                    SET {set_clause}
+                    WHERE report_id = :report_id
+                    RETURNING id, report_id, bcs_class, molecular_weight_min, molecular_weight_max,
+                              experiment_summary, notes, outcome, conducted_at, created_at, metadata
+                """),
+                params,
+            )
+            connection.commit()
+            row = result.fetchone()
+            if not row:
+                return None
+            return {
+                "id": row[0],
+                "report_id": row[1],
+                "bcs_class": row[2],
+                "molecular_weight_min": float(row[3]) if row[3] is not None else None,
+                "molecular_weight_max": float(row[4]) if row[4] is not None else None,
+                "experiment_summary": row[5],
+                "notes": row[6],
+                "outcome": row[7],
+                "conducted_at": str(row[8]) if row[8] else None,
+                "created_at": str(row[9]) if row[9] else None,
+                "metadata": row[10],
+            }
+    except Exception as e:
+        if "internal_experiment_results" in str(e) and "does not exist" in str(e).lower():
+            return None
+        raise RuntimeError(f"update_internal_experiment_partial failed: {e}")
+
+
+def delete_internal_experiment_embeddings_for_result(internal_experiment_result_id: int) -> int:
+    """
+    Delete all embedding rows for this internal_experiment_result_id (so we can replace with a fresh one).
+    Returns the number of rows deleted.
+    """
+    try:
+        with engine.connect() as connection:
+            result = connection.execute(
+                text("""
+                    DELETE FROM internal_experiment_embeddings
+                    WHERE internal_experiment_result_id = :result_id
+                """),
+                {"result_id": internal_experiment_result_id},
+            )
+            connection.commit()
+            return result.rowcount
+    except Exception as e:
+        raise RuntimeError(f"delete_internal_experiment_embeddings_for_result failed: {e}")
+
+
 def insert_internal_experiment_embedding(
     internal_experiment_result_id: int,
     text_content: str,
