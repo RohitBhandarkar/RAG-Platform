@@ -13,7 +13,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
+# Python / root-level lib only (do not ignore webapp/lib/)
+/lib/
 lib64/
 parts/
 sdist/
