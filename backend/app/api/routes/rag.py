@@ -1,13 +1,24 @@
 """RAG context endpoint: user API input -> K nearest embeddings + formulation details."""
 
 import base64
+import re
+import uuid
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
-from app.db import vector_search, get_formulation_context_by_uids
+from app.db import (
+    vector_search,
+    get_formulation_context_by_uids,
+    create_internal_experiment_stub,
+    get_internal_experiment_results_by_report_id,
+    update_internal_experiment_from_lab,
+    update_internal_experiment_partial,
+    insert_internal_experiment_embedding,
+    delete_internal_experiment_embeddings_for_result,
+)
 from app.services.embedding_service import EmbeddingService
 from app.services.rag_engine import generate_report
 
@@ -62,10 +73,23 @@ class RAGContextResponse(BaseModel):
 
 
 class RAGQueryResponse(BaseModel):
-    """RAG query result: markdown report (source) and PDF (for download/view)."""
+    """RAG query result: report_id, markdown report (source) and PDF (for download/view)."""
 
+    report_id: str = Field(..., description="Unique ID for this report; use when populating in-house experiment results later")
     markdown: str = Field(..., description="Experiment report in Markdown (use this to verify content if PDF is faulty)")
     pdf_base64: str = Field(..., description="PDF report as base64; decode to display or download")
+
+
+def _build_report_pdf_filename(body: RAGContextRequest, report_id: str) -> str:
+    """Build a safe, descriptive PDF filename from API input and report_id."""
+    bcs_safe = re.sub(r"[^\w\-.]", "_", (body.bcs_class or "").strip()) or "BCS"
+    mw = body.molecular_weight
+    mw_str = f"{mw:.1f}" if mw is not None and isinstance(mw, (int, float)) else "MW"
+    report_prefix = (report_id or "")[:8] if report_id else ""
+    name = f"formulation_report_BCS-{bcs_safe}_MW-{mw_str}"
+    if report_prefix:
+        name += f"_{report_prefix}"
+    return f"{name}.pdf"
 
 
 def _build_query_text(body: RAGContextRequest) -> str:
@@ -150,8 +174,9 @@ def get_rag_query(
     - **format=json** (default): JSON with `markdown` and `pdf_base64`.
     - **format=pdf**: Raw PDF with Content-Disposition attachment so the browser/Swagger triggers a download.
     """
+    report_id = str(uuid.uuid4())
     try:
-        md_output, pdf_bytes = generate_report(body, llm_base_url="vertex")
+        md_output, pdf_bytes = generate_report(body, llm_base_url="vertex", report_id=report_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except RuntimeError as e:
@@ -159,13 +184,193 @@ def get_rag_query(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+    try:
+        create_internal_experiment_stub(
+            report_id=report_id,
+            bcs_class=body.bcs_class,
+            molecular_weight=body.molecular_weight,
+        )
+    except Exception as e:
+        pass  # Do not fail the response if stub creation fails (e.g. table not migrated yet)
+
     pdf_b64 = base64.b64encode(pdf_bytes).decode("ascii")
 
     if format == "pdf":
         decoded_pdf = base64.b64decode(pdf_b64)
+        filename = _build_report_pdf_filename(body, report_id)
         return Response(
             content=decoded_pdf,
             media_type="application/pdf",
-            headers={"Content-Disposition": 'attachment; filename="formulation_experiment_report.pdf"'},
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "X-Report-Id": report_id,
+            },
         )
-    return RAGQueryResponse(markdown=md_output, pdf_base64=pdf_b64)
+    return RAGQueryResponse(report_id=report_id, markdown=md_output, pdf_base64=pdf_b64)
+
+
+# ---------------------------------------------------------------------------
+# Internal (in-house) experiment results: fetch by report_id, populate + embed
+# ---------------------------------------------------------------------------
+
+
+class InternalExperimentUpdateRequest(BaseModel):
+    """Lab-provided data to populate the internal experiment result for a RAG report."""
+
+    report_id: str = Field(..., description="Report ID from the RAG/query response")
+    experiment_summary: str = Field(..., description="Summary of the experiment and findings")
+    notes: Optional[str] = Field(None, description="Additional notes")
+    outcome: Optional[str] = Field(None, description="Outcome (e.g. success, failed, partial)")
+    conducted_at: Optional[str] = Field(None, description="Date conducted (YYYY-MM-DD)")
+
+
+class InternalExperimentPatchRequest(BaseModel):
+    """Optional fields to update on an existing internal experiment result (e.g. notes only)."""
+
+    result_id: Optional[int] = Field(None, description="ID of the specific result row to update (required when report has multiple entries)")
+    experiment_summary: Optional[str] = Field(None, description="Summary of the experiment and findings")
+    notes: Optional[str] = Field(None, description="Additional notes")
+    outcome: Optional[str] = Field(None, description="Outcome (e.g. success, failed, partial)")
+    conducted_at: Optional[str] = Field(None, description="Date conducted (YYYY-MM-DD)")
+
+
+class InternalExperimentSubmitResponse(BaseModel):
+    """Response after submitting or updating in-house experiment (embedding created)."""
+
+    message: str = Field(..., description="Success message")
+    internal_experiment_result: Dict[str, Any] = Field(..., description="Updated row from internal_experiment_results")
+
+
+@router.get(
+    "/internal-experiment-results/{report_id}",
+    summary="Get all in-house experiment entries for a report ID",
+    response_description="List of internal experiment result rows for this report (stubs and populated)",
+)
+def get_internal_experiments_by_report(report_id: str):
+    """
+    Fetch all in-house experiment records for the given RAG report ID.
+    One report can have multiple entries (submit multiple times via POST /RAG/internal-experiment-results).
+    Returns empty list if none found.
+    """
+    rows = get_internal_experiment_results_by_report_id(report_id)
+    return rows
+
+
+def _build_embedding_text_and_upsert(
+    updated: dict,
+    report_id: str,
+    internal_experiment_result_id: int,
+) -> None:
+    """Build text from updated row, delete existing embeddings for this result, generate new embedding, insert."""
+    parts = [
+        f"BCS Class {updated['bcs_class']}",
+        f"Experiment: {updated.get('experiment_summary') or 'N/A'}",
+    ]
+    if updated.get("molecular_weight_min") is not None or updated.get("molecular_weight_max") is not None:
+        mw_min = updated.get("molecular_weight_min")
+        mw_max = updated.get("molecular_weight_max")
+        if mw_min is not None and mw_max is not None and mw_min == mw_max:
+            parts.append(f"Molecular Weight {mw_min} Da")
+        else:
+            parts.append(f"Molecular weight range {mw_min or '?'}-{mw_max or '?'} Da")
+    if updated.get("notes"):
+        parts.append(f"Notes: {updated['notes']}")
+    if updated.get("outcome"):
+        parts.append(f"Outcome: {updated['outcome']}")
+    text_for_embedding = ". ".join(parts)
+
+    embedding_service = EmbeddingService()
+    embedding = embedding_service.generate_embedding(text_for_embedding)
+
+    delete_internal_experiment_embeddings_for_result(internal_experiment_result_id)
+    insert_internal_experiment_embedding(
+        internal_experiment_result_id=internal_experiment_result_id,
+        text_content=text_for_embedding,
+        embedding=embedding,
+        report_id=report_id,
+        metadata={"report_id": report_id},
+    )
+
+
+@router.post(
+    "/internal-experiment-results",
+    summary="Submit in-house experiment (update result + create embedding)",
+    response_model=InternalExperimentSubmitResponse,
+    response_description="Updated experiment row and confirmation that embedding was created for RAG.",
+)
+def populate_internal_experiment(body: InternalExperimentUpdateRequest):
+    """
+    Update the internal experiment result for the given report_id with lab findings (summary, notes, outcome, date).
+    Then build text from the result, generate an embedding, and store it in internal_experiment_embeddings
+    (replacing any existing embedding for this result) so it appears in future RAG similarity search.
+    Use the report_id returned from POST /RAG/query.
+    """
+    try:
+        updated = update_internal_experiment_from_lab(
+            report_id=body.report_id,
+            experiment_summary=body.experiment_summary,
+            notes=body.notes,
+            outcome=body.outcome,
+            conducted_at=body.conducted_at,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if updated is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No internal experiment result found for report_id={body.report_id}. Generate a report first via POST /RAG/query.",
+        )
+
+    try:
+        _build_embedding_text_and_upsert(updated, body.report_id, updated["id"])
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Embedding failed: {e}")
+
+    return InternalExperimentSubmitResponse(
+        message="Internal experiment updated and embedding created.",
+        internal_experiment_result=updated,
+    )
+
+
+@router.patch(
+    "/internal-experiment-results/{report_id}",
+    summary="Update in-house experiment notes (and/or summary, outcome, date) and refresh embedding",
+    response_model=InternalExperimentSubmitResponse,
+    response_description="Updated experiment row and new embedding for RAG.",
+)
+def patch_internal_experiment(report_id: str, body: InternalExperimentPatchRequest):
+    """
+    Partially update the internal experiment result (e.g. notes only). At least one field must be provided.
+    After update, a new embedding is built from the full row and stored (replacing any previous embedding for this result).
+    """
+    if body.experiment_summary is None and body.notes is None and body.outcome is None and body.conducted_at is None:
+        raise HTTPException(
+            status_code=400,
+            detail="At least one of experiment_summary, notes, outcome, or conducted_at must be provided.",
+        )
+    try:
+        updated = update_internal_experiment_partial(
+            report_id=report_id,
+            experiment_summary=body.experiment_summary,
+            notes=body.notes,
+            outcome=body.outcome,
+            conducted_at=body.conducted_at,
+            result_id=body.result_id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if updated is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No internal experiment result found for report_id={report_id}.",
+        )
+
+    try:
+        _build_embedding_text_and_upsert(updated, report_id, updated["id"])
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Embedding failed: {e}")
+
+    return InternalExperimentSubmitResponse(
+        message="Internal experiment updated and embedding refreshed.",
+        internal_experiment_result=updated,
+    )

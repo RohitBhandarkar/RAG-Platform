@@ -12,7 +12,11 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
 
-from app.db import vector_search, get_formulation_context_by_uids
+from app.db import (
+    vector_search,
+    get_formulation_context_by_uids,
+    get_internal_experiment_results_by_ids,
+)
 from app.services.embedding_service import EmbeddingService
 from app.services.llm_service import LLMService
 
@@ -123,10 +127,10 @@ def _build_query_text_from_body(body: Any) -> str:
 
 def get_rag_context(
     body: Any,
-) -> Tuple[str, List[Dict[str, Any]], List[Dict[str, Any]]]:
+) -> Tuple[str, List[float], List[Dict[str, Any]], List[Dict[str, Any]]]:
     """
     Fetch context the same way as POST /RAG/context: embed query, vector search, load formulation details.
-    Returns (query_text, nearest_embeddings, formulation_details).
+    Returns (query_text, query_embedding, nearest_embeddings, formulation_details).
     """
     query_text = _build_query_text_from_body(body)
     embedding_service = EmbeddingService()
@@ -142,16 +146,18 @@ def get_rag_context(
         if uid and uid not in formulation_uids:
             formulation_uids.append(uid)
     formulation_details = get_formulation_context_by_uids(formulation_uids) if formulation_uids else []
-    return query_text, nearest, formulation_details
+    return query_text, query_embedding, nearest, formulation_details
 
 
 def _build_report_prompt(
     query_text: str,
     formulation_details: List[Dict[str, Any]],
     nearest_embeddings: List[Dict[str, Any]],
+    internal_experiment_results: List[Dict[str, Any]] | None = None,
 ) -> str:
     """Build the prompt for the LLM: context + strict instructions (no hallucinations)."""
     context_parts = []
+    internal_list = internal_experiment_results or []
 
     context_parts.append("## Input API properties (query)\n" + query_text)
 
@@ -194,6 +200,23 @@ def _build_report_prompt(
             score = meta.get("confidence_score", 0.0)
             context_parts.append(f"- **{display}**: Confidence = {conf} ({score})")
 
+    context_parts.append("\n## Internal (in-house) experimentation")
+    if not internal_list:
+        context_parts.append("(No relevant in-house experimentation data found for this API profile.)")
+    else:
+        for i, row in enumerate(internal_list, 1):
+            block = [
+                f"### Internal result {i}",
+                f"- Summary: {row.get('experiment_summary') or 'N/A'}",
+            ]
+            if row.get("notes"):
+                block.append(f"- Notes: {row['notes']}")
+            if row.get("outcome"):
+                block.append(f"- Outcome: {row['outcome']}")
+            if row.get("conducted_at"):
+                block.append(f"- Conducted: {row['conducted_at']}")
+            context_parts.append("\n".join(block))
+
     context_str = "\n\n".join(context_parts)
 
     system = """You are a pharmaceutical formulation scientist. Write a clear, professional **experiment report** in Markdown format.
@@ -206,7 +229,8 @@ Your report must include the following sections (use only information from the c
 2. **Input API summary** – Brief summary of the queried properties (molecular weight, BCS class, etc.).
 3. **Recommended excipients** – List each excipient BY NAME (from "Retrieved formulation context"), with its amount when present, then the confidence for that excipient (from "Excipient metadata"). Format each line as: **Excipient Name**: amount or "amount not specified in source" — Confidence: High/Medium/Low (numeric score). Example: **HPMC E3**: 0.98 mg/mL — Confidence: Medium (0.72). You must include both the tier (High/Medium/Low) and the numeric score in parentheses. You may group by role (e.g. Stabilizers, Polymer carriers) as in the context. Do NOT list confidence alone; every bullet must include excipient name, then amount, then confidence with score.
 4. **Experiments to conduct** – Based on the retrieved context, list what experiments can be performed to test these formulations (e.g. dissolution, stability, particle size, bioavailability). Only include experiments that are mentioned or clearly implied in the provided context.
-5. **Source summary** – One short paragraph noting that recommendations are based on retrieved literature/formulation data.
+5. **Internal (in-house) experimentation** – Use ONLY the "Internal (in-house) experimentation" section of the context. If that section contains one or more internal results: summarize the relevant in-house experiment results and notes (summary, outcome, conducted date when present). If the context states "(No relevant in-house experimentation data found for this API profile.)", then state clearly that **this is a novel experiment that has not been conducted in-house before**.
+6. **Source summary** – One short paragraph noting that recommendations are based on retrieved literature/formulation data.
 
 Output ONLY valid Markdown. No preamble or meta-commentary."""
 
@@ -357,14 +381,34 @@ def generate_report(
     body: Any,
     *,
     llm_base_url: str = "vertex",
+    report_id: str | None = None,
 ) -> Tuple[str, bytes]:
     """
     Full RAG pipeline: get context, generate markdown report via Vertex AI, convert to PDF.
+    If report_id is provided, it is appended to the markdown (and thus visible in the PDF).
     Returns (markdown_str, pdf_bytes).
     """
-    query_text, nearest, formulation_details = get_rag_context(body)
-    prompt = _build_report_prompt(query_text, formulation_details, nearest)
+    query_text, query_embedding, nearest, formulation_details = get_rag_context(body)
+    internal_embedding_hits = vector_search(
+        table="internal_experiment_embeddings",
+        query_embedding=query_embedding,
+        n_results=10,
+    )
+    internal_result_ids = [
+        row["internal_experiment_result_id"]
+        for row in internal_embedding_hits
+        if row.get("internal_experiment_result_id") is not None
+    ]
+    internal_results = get_internal_experiment_results_by_ids(internal_result_ids)
+    prompt = _build_report_prompt(query_text, formulation_details, nearest, internal_results)
     llm = LLMService(base_url=llm_base_url)
     md_output = llm.generate_text(prompt)
+    if report_id:
+        md_output = (
+            "**Report ID:** `"
+            + report_id
+            + "`\n\n*Use this ID when submitting in-house experiment results (POST /RAG/internal-experiment-results).*\n\n---\n\n"
+            + md_output
+        )
     pdf_bytes = markdown_to_pdf(md_output)
     return md_output, pdf_bytes
