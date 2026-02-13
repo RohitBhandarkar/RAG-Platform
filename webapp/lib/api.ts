@@ -1,6 +1,7 @@
 /**
  * API client for the RAG Platform FastAPI backend.
- * Base URL: user-configured (localStorage) if set after login, else NEXT_PUBLIC_API_URL, else localhost:8000.
+ * When the app is served over HTTPS (e.g. Vercel) and the backend is HTTP, requests
+ * go through /api/backend-proxy to avoid mixed content blocking.
  */
 
 import { getStoredApiUrl } from "./backend-url";
@@ -13,6 +14,27 @@ function getBaseUrl(): string {
   const url = process.env.NEXT_PUBLIC_API_URL;
   if (url && url.trim()) return url.trim().replace(/\/$/, "");
   return "http://localhost:8000";
+}
+
+/** True when we must use the proxy (HTTPS page calling HTTP backend). */
+function useProxy(): boolean {
+  if (typeof window === "undefined") return false;
+  const base = getBaseUrl();
+  return window.location.protocol === "https:" && base.startsWith("http://");
+}
+
+async function fetchViaProxy(path: string, options: RequestInit = {}): Promise<Response> {
+  const base = getBaseUrl();
+  const pathOnly = path.startsWith("/") ? path : `/${path}`;
+  const method = (options.method || "GET").toUpperCase();
+  const body = options.body != null
+    ? (typeof options.body === "string" ? options.body : JSON.stringify(options.body))
+    : undefined;
+  return fetch("/api/backend-proxy", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ baseUrl: base, path: pathOnly, method, body }),
+  });
 }
 
 export class BackendUnreachableError extends Error {
@@ -28,6 +50,18 @@ async function fetchApi<T>(
 ): Promise<T> {
   const base = getBaseUrl();
   const url = `${base}${path.startsWith("/") ? path : `/${path}`}`;
+
+  if (useProxy()) {
+    const res = await fetchViaProxy(path, options);
+    const text = await res.text();
+    if (!res.ok) throw new Error(text || `HTTP ${res.status}`);
+    try {
+      return JSON.parse(text) as T;
+    } catch {
+      throw new Error(text || "Invalid JSON");
+    }
+  }
+
   try {
     const res = await fetch(url, {
       ...options,
@@ -90,6 +124,12 @@ export async function getRAGContext(body: RAGContextRequest) {
 // --- Health (for backend status) ---
 
 export async function getHealth(): Promise<{ status: string }> {
+  if (useProxy()) {
+    const res = await fetchViaProxy("/health", { method: "GET" });
+    const text = await res.text();
+    if (!res.ok) throw new Error("Unhealthy");
+    return JSON.parse(text) as { status: string };
+  }
   const base = getBaseUrl();
   const res = await fetch(`${base}/health`, { cache: "no-store" });
   if (!res.ok) throw new Error("Unhealthy");
