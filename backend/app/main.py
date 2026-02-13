@@ -1,10 +1,14 @@
 from typing import Literal
 import logging
 from enum import Enum
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import Response
 from sqlalchemy import text
 
 from app.config import settings
@@ -47,6 +51,53 @@ app = FastAPI(title="RAG Backend", version="0.1.0")
 _cors_origins = [o.strip() for o in settings.CORS_ORIGINS.split(",") if o.strip()]
 if not _cors_origins:
     _cors_origins = [settings.FRONTEND_URL] if settings.FRONTEND_URL else ["http://localhost:3000"]
+
+
+def _is_origin_allowed(origin: str) -> bool:
+    if not origin or not origin.strip():
+        return False
+    origin = origin.strip()
+    if origin in _cors_origins:
+        return True
+    try:
+        parsed = urlparse(origin)
+        if parsed.hostname and parsed.hostname.endswith(".vercel.app"):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+class CORSVercelMiddleware(BaseHTTPMiddleware):
+    """Allow explicit CORS origins and any *.vercel.app origin so Vercel deployments connect without config."""
+
+    async def dispatch(self, request: Request, call_next) -> Response:
+        origin = request.headers.get("origin", "").strip()
+        if not origin:
+            return await call_next(request)
+        if not _is_origin_allowed(origin):
+            return await call_next(request)
+        # Handle preflight so Vercel origins get a valid CORS response
+        if request.method == "OPTIONS":
+            return Response(
+                status_code=200,
+                headers={
+                    "Access-Control-Allow-Origin": origin,
+                    "Access-Control-Allow-Credentials": "true",
+                    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+                    "Access-Control-Allow-Headers": "*",
+                    "Access-Control-Max-Age": "86400",
+                },
+            )
+        response = await call_next(request)
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Access-Control-Expose-Headers"] = "*"
+        return response
+
+
+# Add custom CORS first (runs after CORSMiddleware in the chain); then CORSMiddleware for non-Vercel explicit origins
+app.add_middleware(CORSVercelMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,

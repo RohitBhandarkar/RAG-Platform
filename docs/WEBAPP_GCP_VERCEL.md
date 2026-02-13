@@ -10,9 +10,9 @@ The backend runs on the VM (e.g. port **8080**). The browser will call it from y
 
 ### 1.1 CORS (backend)
 
-The backend uses `CORS_ORIGINS` to decide which origins are allowed. Set it on the VM (e.g. in the deploy workflow or in the container env) so it includes your webapp URL(s).
+The backend allows **any origin whose hostname ends with `.vercel.app`** automatically, so **Vercel deployments connect without setting `CORS_ORIGINS`**. You can still set `CORS_ORIGINS` for additional origins (e.g. a custom domain or `http://localhost:3000` for local dev).
 
-**Option A – GitHub Actions (recommended)**  
+**Option A – GitHub Actions (optional)**  
 The deploy workflow already passes `FRONTEND_URL` and `CORS_ORIGINS` from GitHub secrets into the backend container. In your repo → **Settings** → **Secrets and variables** → **Actions**, add:
 
 - **`CORS_ORIGINS`**: `https://your-app.vercel.app,http://localhost:3000` (use your real Vercel URL; add `http://localhost:3000` for local dev).
