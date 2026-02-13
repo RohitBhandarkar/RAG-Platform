@@ -176,6 +176,8 @@ jobs:
                 -e POSTGRES_DB=formulation_rag \
                 -e POSTGRES_USER=postgres \
                 -e POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }} \
+                -e FRONTEND_URL=${{ secrets.FRONTEND_URL }} \
+                -e CORS_ORIGINS=${{ secrets.CORS_ORIGINS }} \
                 ${{ env.ARTIFACT_REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/rag-backend/${{ env.IMAGE_NAME }}:${{ github.sha }}
 
               echo '=== Running create_document_store.sh inside container ==='

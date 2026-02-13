@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     API_HOST: str = Field("0.0.0.0")
     API_PORT: int = Field(8080)
     FRONTEND_URL: str = Field("http://localhost:3000")
+    # Comma-separated list of origins allowed by CORS (e.g. webapp on Vercel). Defaults to FRONTEND_URL.
+    CORS_ORIGINS: str = Field("")
 
     DOC_STORAGE_ROOT: str = Field("../data")
 
