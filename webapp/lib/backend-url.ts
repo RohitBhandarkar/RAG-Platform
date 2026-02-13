@@ -22,7 +22,10 @@ export function setStoredApiUrl(url: string): void {
   if (typeof window === "undefined") return;
   const value = url.trim().replace(/\/$/, "");
   localStorage.setItem(STORAGE_KEY, value || "");
-  window.dispatchEvent(new CustomEvent("backendUrlUpdated"));
+  // Defer so status re-check runs after save is committed and components can read new URL
+  setTimeout(() => {
+    window.dispatchEvent(new CustomEvent("backendUrlUpdated"));
+  }, 0);
 }
 
 /**
