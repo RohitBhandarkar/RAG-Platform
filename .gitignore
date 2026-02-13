@@ -63,6 +63,7 @@ node_modules/
 /frontend/build
 /frontend/.next
 /frontend/dist
+/frontend/package-lock.json
 
 # GCP
 .gcloudignore
